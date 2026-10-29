@@ -203,3 +203,47 @@ a { color: var(--acc); }
 #sheet .sheethead { position: sticky; top: -10px; z-index: 3; margin: -10px -18px 10px; padding: 10px 18px 8px; background: var(--s2); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; touch-action: none; }
 #sheet .sheethead .grab { flex: 0 0 100%; margin: 0 auto 8px; }
 #sheet .sclose { appearance: none; border: 1px solid var(--line2); background: rgba(255,255,255,.06); color: var(--tx, #fff); font: 700 14px var(--f-num, inherit); padding: 8px 14px; border-radius: 999px; cursor: pointer; }
+
+/* ---------- układ responsywny: telefon (domyślnie) → tablet → komputer ---------- */
+@media (min-width: 720px) {
+  :root { --nav-h: 64px; }
+  body { font-size: 16px; }
+  #app { max-width: 760px; }
+  #view { padding-left: 28px; padding-right: 28px; }
+  #tabs .in { max-width: 760px; }
+  .top h1 { font-size: 30px; }
+  #sheet .pane { bottom: 4vh; max-width: 620px; border-radius: 28px; border-bottom: 1px solid var(--line2); padding-bottom: 24px; box-shadow: 0 30px 80px rgba(0, 0, 0, .55); transform: translateY(calc(100% + 12vh)); }
+  .toast { bottom: calc(var(--nav-h) + var(--sab) + 22px); }
+}
+@media (min-width: 1100px) {
+  :root { --side-w: 232px; }
+  #app { max-width: none; margin: 0; padding-left: var(--side-w); }
+  #view { max-width: 1120px; margin: 0 auto; padding: 36px 40px 60px; }
+  /* nawigacja boczna */
+  #tabs { top: 0; right: auto; bottom: 0; width: var(--side-w); padding: 28px 14px; border-top: 0; border-right: 1px solid var(--line2); }
+  #tabs .in { max-width: none; height: auto; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+  #tabs button { flex-direction: row; justify-content: flex-start; height: 48px; padding: 0 16px; gap: 14px; font-size: 15px; border-radius: 14px; }
+  #tabs button:hover { background: var(--s1); color: var(--tx); }
+  #tabs button.on { background: var(--acc-bg); }
+  #tabs button.on::after { display: none; }
+  #tabs .plus { order: -1; display: flex; align-items: center; flex-direction: row; width: auto; height: 50px; margin: 0 0 18px; border-radius: 16px; justify-content: center; gap: 10px; }
+  #tabs .plus::before { content: 'Dodaj'; font-weight: 800; font-size: 15px; }
+  #tabs .plus:hover { background: linear-gradient(160deg, #3dffbb, var(--acc2)); color: #04120d; }
+  .toast { bottom: 32px; left: calc(50% + var(--side-w) / 2); }
+  #view .cols { column-count: 2; column-gap: 22px; }
+  #view .cols > * { break-inside: avoid; }
+  #view .cols > .h2 { break-after: avoid; }
+  #view .cols > .h2:first-child { margin-top: 0; }
+  #sheet .pane { max-width: 640px; bottom: 50%; transform: translateY(calc(50% + 120vh)); }
+  #sheet.open .pane { transform: translateY(50%); }
+  button:hover:not([disabled]) { filter: brightness(1.08); }
+  button.row:hover { background: rgba(255, 255, 255, .03); }
+}
+@media (hover: none) { button:hover { filter: none !important; } }
+/* niski, szeroki ekran (telefon poziomo): nawigacja zostaje na dole, ale kompaktowa */
+@media (max-height: 480px) and (orientation: landscape) {
+  :root { --nav-h: 48px; }
+  #tabs button { flex-direction: row; gap: 8px; font-size: 12px; }
+  #tabs .plus { width: 44px; height: 44px; margin-top: -8px; }
+  #sheet .pane { max-height: 94%; bottom: 0; border-radius: 22px 22px 0 0; transform: translateY(105%); }
+}

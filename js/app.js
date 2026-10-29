@@ -249,6 +249,9 @@ function render(first = false) {
   const v = $('#view'), st = scrollY;
   v.className = first ? 'enter' : '';
   v.innerHTML = VIEWS[VIEW]();
+  // pod .top: opakowanie, które na szerokich ekranach układa karty w dwie kolumny
+  const top = v.querySelector(':scope > .top');
+  if (top) { const w = document.createElement('div'); w.className = 'cols'; while (top.nextSibling) w.appendChild(top.nextSibling); v.appendChild(w); }
   scrollTo(0, first ? 0 : st);
   mount(first);
   renderTabs();
