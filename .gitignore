@@ -1,0 +1,7 @@
+# nigdy nie wrzucaj wyciągów ani kopii danych do publicznego repozytorium
+*.csv
+*.mt940
+*.sta
+budzet-kopia-*.json
+private/
+.DS_Store
