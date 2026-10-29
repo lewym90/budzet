@@ -42,7 +42,7 @@ const svg = (p, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 const KEY = 'budzet.v1';
 const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {}, people: [], rules: [], receiptLog: [], debtExtra: 0, recIgnore: [] });
 let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; j.people = j.people || []; j.rules = j.rules || []; j.receiptLog = j.receiptLog || []; j.recIgnore = j.recIgnore || []; return j; } } catch { } return fresh(); })();
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { } };
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('Nie mogę zapisać danych (brak miejsca w przeglądarce). Pobierz kopię w ustawieniach.'); } };
 const accounts = () => (S.mode === 'demo' ? DEMO_ACCOUNTS : S.accounts);
 const accName = id => (accounts().find(a => a.id === id) || { name: id }).name;
 
@@ -394,8 +394,8 @@ function vAnaliza() {
   if (!TX.length) return head('Analiza') + empty('Brak danych', 'Zaimportuj wyciągi z kilku miesięcy, a policzę prognozę, koszty długu i anomalie.', 'Importuj wyciąg');
   const ai = anchorInfo(), mk = U.am && monthsWithData().includes(U.am) ? U.am : monthsWithData().slice(-1)[0];
   const fc = ai ? forecast(TX, REC, TODAY, ai.anchor, 35) : null, dv = ai ? debtView(TX, ai.acc, TODAY) : null;
-  const wm = whyMonth(TX, mk), an = anomalies(TX, REC, TODAY), ib = inbox(TX), cands = personCandidates(TX, S.people), pr = productPrices(S.receiptLog || []);
-  const yr = yearSummary(TX, +TODAY.slice(0, 4)), ms = monthsWithData().slice(-5);
+  const wm = whyMonth(TX, mk, TODAY), an = [...INS.filter(i => i.id.startsWith('dup-')).map(i => ({ title: i.title, body: i.body })), ...anomalies(TX, REC, TODAY)], ib = inbox(TX), cands = personCandidates(TX, S.people), pr = productPrices(S.receiptLog || []);
+  const yr = yearSummary(TX, +TODAY.slice(0, 4), TODAY), ms = monthsWithData().slice(-5);
   let h = head('Analiza', 'Liczone z Twoich wyciągów');
   // 1. prognoza
   if (fc && !fc.notEnough) {
@@ -430,7 +430,7 @@ function vAnaliza() {
   if (wm) {
     const cl = c => `<div class="row"><div class="ico" style="background:${(CAT[c.id] || {}).color || 'var(--s3)'}">${letter(c.name)}</div><div class="mid"><div class="t">${esc(c.name)}</div><div class="s">teraz ${money(c.cur)} · średnio ${money(c.avg)}</div></div><div class="amt ${c.diff > 0 ? 'neg' : 'pos'}">${c.diff > 0 ? '+' : '−'}${money(Math.abs(c.diff))}</div></div>`;
     h += `<div class="h2">Dlaczego ${esc(mName(mk))} wyszedł tak${mk === TODAY.slice(0, 7) ? ` <b>do ${plDate(TODAY)}</b>` : ''}</div><div class="chips">${ms.map(m => `<button class="chip ${m === mk ? 'on' : ''}" data-act="amonth" data-m="${m}">${MSHORT[+m.slice(5, 7) - 1]}</button>`).join('')}</div>
-    <div class="card"><div class="kv"><span class="muted">Wydano</span><b class="num">${money(wm.spent)}</b></div><div class="kv"><span class="muted">Średnio z ${wm.prev.length} mies. wcześniej</span><b class="num">${money(wm.avgSpent)}</b></div><div class="kv"><span class="muted">Wpływy (regularne)</span><b class="num">${money(wm.income)} <small class="muted">śr. ${money(wm.avgIncome)}</small></b></div>
+    <div class="card"><div class="kv"><span class="muted">Wydano</span><b class="num">${money(wm.spent)}</b></div><div class="kv"><span class="muted">${wm.upTo ? `Średnio do ${wm.upTo}. dnia, z ${wm.prev.length} mies. wcześniej` : `Średnio z ${wm.prev.length} mies. wcześniej`}</span><b class="num">${money(wm.avgSpent)}</b></div><div class="kv"><span class="muted">Wpływy (regularne)</span><b class="num">${money(wm.income)} <small class="muted">śr. ${money(wm.avgIncome)}</small></b></div>
       ${wm.cats.length ? `<div class="h2" style="margin:14px 0 4px">Gdzie jest różnica</div>${wm.cats.slice(0, 5).map(cl).join('')}` : '<div class="small muted" style="margin-top:10px">Żadna kategoria nie odbiega od średniej o więcej niż 50 zł.</div>'}
       ${wm.top.length ? `<div class="h2" style="margin:14px 0 4px">Największe wydatki</div>${wm.top.map(t => `<button class="row" data-act="tx" data-id="${esc(t.id)}"><div class="mid"><div class="t">${esc(t.name)}</div><div class="s">${plDate(t.date)}</div></div><div class="amt">${money(t.v)}</div></button>`).join('')}` : ''}
       ${wm.fresh.length ? `<div class="small muted" style="margin-top:8px">Nowi sprzedawcy: ${wm.fresh.map(f => `${esc(f.name)} ${money(f.v)}`).join(', ')}</div>` : ''}
@@ -459,12 +459,12 @@ function vAnaliza() {
 function narrFacts(kind) {
   const f = []; const add = (text, ...nums) => f.push({ id: 'f' + (f.length + 1), text, nums });
   if (kind === 'why') {
-    const mk = U.am && monthsWithData().includes(U.am) ? U.am : monthsWithData().slice(-1)[0], w = whyMonth(TX, mk); if (!w) return [];
-    add(`${mName(mk)}: wydano ${nf(w.spent)} zł`, Math.round(w.spent)); add(`Średnio z ${w.prev.length} wcześniejszych miesięcy wydawano ${nf(w.avgSpent)} zł`, Math.round(w.avgSpent), w.prev.length);
+    const mk = U.am && monthsWithData().includes(U.am) ? U.am : monthsWithData().slice(-1)[0], w = whyMonth(TX, mk, TODAY); if (!w) return [];
+    add(`${mName(mk)}: wydano ${nf(w.spent)} zł`, Math.round(w.spent)); add(`${w.upTo ? `Średnio do ${w.upTo}. dnia miesiąca, z ${w.prev.length} wcześniejszych miesięcy,` : `Średnio z ${w.prev.length} wcześniejszych miesięcy`} wydawano ${nf(w.avgSpent)} zł`, Math.round(w.avgSpent), w.prev.length, ...(w.upTo ? [w.upTo] : []));
     for (const c of w.cats.slice(0, 4)) add(`Kategoria ${c.name}: ${nf(c.cur)} zł w tym miesiącu wobec średnio ${nf(c.avg)} zł`, Math.round(c.cur), Math.round(c.avg));
     for (const t of w.top.slice(0, 3)) add(`Duży wydatek: ${t.name} ${nf(t.v)} zł, ${plDate(t.date)}`, Math.round(t.v));
   } else {
-    const y = yearSummary(TX, +TODAY.slice(0, 4)); if (!y) return [];
+    const y = yearSummary(TX, +TODAY.slice(0, 4), TODAY); if (!y) return [];
     add(`Regularne wpływy w ${y.year}: ${nf(y.income)} zł`, Math.round(y.income)); add(`Wydatki w ${y.year}: ${nf(y.spent)} zł`, Math.round(y.spent)); add(`Bilans roku: ${nf(Math.abs(y.net))} zł ${y.net < 0 ? 'na minusie' : 'na plusie'}`, Math.round(Math.abs(y.net)));
     for (const c of y.cats.slice(0, 3)) add(`Kategoria ${c.name}: ${nf(c.v)} zł`, Math.round(c.v));
     if (y.debtCost) add(`Koszt długu na koncie: ${nf(y.debtCost)} zł`, Math.round(y.debtCost)); if (y.tax) add(`Podatki i urzędy: ${nf(y.tax)} zł`, Math.round(y.tax));

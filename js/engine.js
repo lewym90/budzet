@@ -11,6 +11,8 @@ export const CATS = [
   { id: 'zdrowie',     name: 'Zdrowie i uroda',         color: '#9085e9', variable: true },
   { id: 'rozrywka',    name: 'Rozrywka i podróże',      color: '#e66767', variable: true },
   { id: 'gotowka',     name: 'Gotówka',                 color: '#b8a06a', variable: true },
+  { id: 'bank',        name: 'Bank, odsetki i opłaty',  color: '#8f7ae6', variable: false },
+  { id: 'podatki',     name: 'Podatki i urzędy',        color: '#5f8fa8', variable: false },
   { id: 'osoby',       name: 'Przelewy do osób',        color: '#c07ad6', variable: true },
   { id: 'inne',        name: 'Inne',                    color: '#7d8aa3', variable: true },
   { id: 'dochod',      name: 'Wpływy',                  color: '#2ee6a6', variable: false },
@@ -26,9 +28,9 @@ export const RATES = { PLN: 1, EUR: 4.27, USD: 3.95, GBP: 4.95, CZK: 0.17, CHF: 
 // opcje: own = przelew własny, irr = wpływ nieregularny, offset = wypłata pomniejsza wydatki kategorii, multi = kilka różnych kwot
 const RULES = [
   [/WYPLATA GOTOWKI|WYPLATA Z BANKOMATU|CASH WITHDRAWAL|\bATM\b/, 'Wypłata z bankomatu', 'gotowka'],
-  [/PROWIZJA ZA WYPLAT|OPLATA ZA WYPLAT|OPL\.? ?ZA WYPLAT/, 'Prowizje bankowe', 'inne', 'Bank'],
-  [/PROW\.? ?I OPL|ZWIEKSZENIE LIM/, 'Opłaty za limit w koncie', 'inne', 'Dług'],
-  [/URZAD SKARBOWY|PIT-?\d|\bZUS\b/, 'Podatki i urzędy', 'inne'],
+  [/PROWIZJA ZA WYPLAT|OPLATA ZA WYPLAT|OPL\.? ?ZA WYPLAT/, 'Prowizje bankowe', 'bank', 'Bank'],
+  [/PROW\.? ?I OPL|ZWIEKSZENIE LIM/, 'Opłaty za limit w koncie', 'bank', 'Dług'],
+  [/URZAD SKARBOWY|PIT-?\d|\bZUS\b/, 'Podatki i urzędy', 'podatki'],
   [/GMINA|ODPAD/, 'Odpady i opłaty gminne', 'mieszkanie', null, 0, 1],
   [/KAUCJA/, 'Kaucja', 'inne'],
   [/FOODSI|CUKIERN|KARMELLO|\bALDI\b|TOM MARKET|INTERMARCHE|SPOMLEK|DELIKATESY|PIEKARN|LODZIARN|SKLEP ABC|MAKRO|CARREFOUR/, 'Sklep spożywczy', 'jedzenie'],
@@ -38,9 +40,9 @@ const RULES = [
   [/WETERYN|ALAB|DIAGNOSTYK/, 'Zdrowie i weterynarz', 'zdrowie'],
   [/AUTO[- ]?(MIX|PERFEKT)|MYJNIA|WULKANIZ|WARSZTAT/, 'Auto', 'transport'],
   [/KREA\.?AI/, 'Krea', 'subskrypcje', 'AI', 1],
-  [/PROWIZJA ZA PRZEWALUTOWANIE/, 'Prowizje za przewalutowanie', 'inne', 'Bank'],
-  [/ODS - KRED/, 'Koszt zadłużenia w koncie', 'inne', 'Dług'],
-  [/OBSL\.? ?LIMITU|LIMITU ZADL|PROWIZJA ZA OBSL/, 'Prowizja za obsługę limitu', 'inne', 'Dług'],
+  [/PROWIZJA ZA PRZEWALUTOWANIE/, 'Prowizje za przewalutowanie', 'bank', 'Bank'],
+  [/ODS - KRED/, 'Koszt zadłużenia w koncie', 'bank', 'Dług'],
+  [/OBSL\.? ?LIMITU|LIMITU ZADL|PROWIZJA ZA OBSL/, 'Prowizja za obsługę limitu', 'bank', 'Dług'],
   [/LIMIT W KONCIE/, 'Limit w koncie', 'inne', null, 0, 0, { own: 1 }],
   [/PRZELEW WLASNY/, 'Przelew własny', 'inne', null, 0, 0, { own: 1 }],
   [/REVOLUT\*\*|REVOLUT BANK/, 'Revolut (doładowanie)', 'inne', null, 0, 0, { own: 1 }],
@@ -513,14 +515,19 @@ export function dedupeKey(t) {
 }
 
 // przetwarza całość: kategorie, przelewy własne, stałe opłaty
-// wpływ jest regularny (np. pensja), jeśli to samo źródło pojawia się w co najmniej 3 różnych miesiącach; reszta to wpływy jednorazowe
+// Wpływ jest regularny (np. pensja), jeśli płatności o podobnej kwocie od tego samego źródła pojawiają się w co najmniej 3 kolejnych miesiącach.
+// Ten sam nadawca może wysyłać też nieregularne kwoty (zwroty, dodatki jednorazowe): te trafiają do wpływów jednorazowych.
 function markIrregularIncome(txs) {
   const months = new Set(txs.map(t => t.date.slice(0, 7)));
   if (months.size < 3) return;
   const g = new Map();
-  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr) { const a = g.get(t.mkey) || new Set(); a.add(t.date.slice(0, 7)); g.set(t.mkey, a); }
+  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr) { if (!g.has(t.mkey)) g.set(t.mkey, []); g.get(t.mkey).push(t); }
   const run = set => { const ms = [...set].sort(); let best = 1, cur = 1; for (let i = 1; i < ms.length; i++) { cur = addMonths(ms[i - 1], 1) === ms[i] ? cur + 1 : 1; best = Math.max(best, cur); } return ms.length ? best : 0; };
-  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr && run(g.get(t.mkey)) < 3) { t.irr = true; t.cat = 'nieregularny'; } // regularny wpływ: co najmniej 3 kolejne miesiące
+  for (const arr of g.values()) {
+    const s = [...arr].sort((a, b) => a.amountPLN - b.amountPLN), clusters = [];
+    for (const t of s) { const c = clusters[clusters.length - 1]; if (c && t.amountPLN <= c[c.length - 1].amountPLN * 1.15) c.push(t); else clusters.push([t]); }
+    for (const c of clusters) if (run(new Set(c.map(t => t.date.slice(0, 7)))) < 3) for (const t of c) { t.irr = true; t.cat = 'nieregularny'; }
+  }
 }
 export function analyze(txs, overrides, today, owners) {
   if (owners) setOwners(owners);

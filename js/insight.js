@@ -78,10 +78,13 @@ export function debtProject(nowBal, delta, extra, months = 12) {
 }
 
 /* ---------- dlaczego ten miesiąc wyszedł tak ---------- */
-export function whyMonth(txs, mk) {
+export function whyMonth(txs, mk, ref) {
   const prev = fullMonthsBefore(txs, mk, 3);
   if (!prev.length) return null;
-  const cur = monthTotals(txs, mk), pt = prev.map(m => monthTotals(txs, m));
+  // miesiąc w toku porównuję z poprzednimi do tego samego dnia miesiąca, a nie z całymi miesiącami
+  const D = ref && monthKey(ref) === mk && +ref.slice(8, 10) < dim(mk) ? +ref.slice(8, 10) : 0;
+  const upTo = m => (D ? txs.filter(t => monthKey(t.date) !== m || +t.date.slice(8, 10) <= D) : txs);
+  const cur = monthTotals(txs, mk), pt = prev.map(m => monthTotals(upTo(m), m));
   const avg = k => sum(pt.map(p => k(p))) / pt.length;
   const cats = Object.keys({ ...cur.byCat, ...Object.assign({}, ...pt.map(p => p.byCat)) }).map(id => {
     const a = cur.byCat[id] || 0, b = avg(p => p.byCat[id] || 0);
@@ -92,7 +95,7 @@ export function whyMonth(txs, mk) {
   const top = [...inMonth].sort((a, b) => a.amountPLN - b.amountPLN).slice(0, 5).map(t => ({ id: t.id, name: t.name, date: t.date, v: -t.amountPLN, cat: t.cat }));
   const nm = {}; for (const t of inMonth) if (!seenBefore.has(t.mkey)) { const n = nm[t.mkey] || (nm[t.mkey] = { name: t.name, v: 0 }); n.v += -t.amountPLN; }
   const fresh = Object.values(nm).filter(x => x.v >= 100).sort((a, b) => b.v - a.v).slice(0, 4);
-  return { mk, prev, spent: cur.spent, avgSpent: avg(p => p.spent), income: cur.income, avgIncome: avg(p => p.income), cats, top, fresh };
+  return { mk, prev, upTo: D, spent: cur.spent, avgSpent: avg(p => p.spent), income: cur.income, avgIncome: avg(p => p.income), cats, top, fresh };
 }
 
 /* ---------- anomalie ---------- */
@@ -112,11 +115,8 @@ export function anomalies(txs, rec, today) {
     if (r.active && r.count <= 3 && r.last >= recent && r.kind !== 'przelew cykliczny') out.push({ type: 'new', rank: 2, key: r.key, title: `Nowa płatność cykliczna: ${r.name}`, body: `${r.count} płatności, ${r0(r.latest)} zł ${r.periodLabel}. Wychodzi ${r0(r.yearly)} zł rocznie.` });
     if (!r.active && r.kind !== 'przelew cykliczny' && r.last >= dstr(dnum(today) - 100) && r.monthly >= 20) out.push({ type: 'gone', rank: 3, key: r.key, title: `Zniknęła: ${r.name}`, body: `Ostatnia płatność ${r.last}. Jeśli to Twoja decyzja, oszczędzasz ${r0(r.monthly)} zł miesięcznie.` });
   }
-  const w = whyMonth(txs, mk);
+  const w = whyMonth(txs, mk, today);
   if (w) for (const c of w.cats.filter(c => c.diff > 150 && c.avg > 0 && c.cur > 1.4 * c.avg).slice(0, 3)) out.push({ type: 'cat', rank: 2, cat: c.id, title: `${c.name}: ${r0(c.cur)} zł w tym miesiącu`, body: `Średnio z ostatnich ${w.prev.length} mies. wychodziło ${r0(c.avg)} zł, czyli o ${r0(c.diff)} zł mniej.` });
-  // podwójne obciążenie: ta sama kwota, ten sam sprzedawca, ten sam dzień
-  const seen = new Map();
-  for (const t of spend) { if (t.recKey || t.cat === 'gotowka' || -t.amountPLN < 100) continue; const k = `${t.mkey}|${t.date}|${t.amountPLN}`; const p = seen.get(k); if (p && t.date >= recent) out.push({ type: 'dup', rank: 1, id: t.id, title: `Podwójne obciążenie? ${t.name} ${r0(-t.amountPLN)} zł`, body: `Dwie takie same płatności ${t.date}.` }); seen.set(k, t); }
   const uniq = new Set(); return out.filter(o => !uniq.has(o.title) && uniq.add(o.title)).sort((a, b) => a.rank - b.rank).slice(0, 12);
 }
 
@@ -131,12 +131,13 @@ export function inbox(txs) {
 }
 
 /* ---------- podsumowanie roku ---------- */
-export function yearSummary(txs, year) {
+export function yearSummary(txs, year, ref) {
   const ts = txs.filter(t => !t.internal && !t.pending && t.date.startsWith(String(year)));
   if (!ts.length) return null;
   const months = [...new Set(ts.map(t => monthKey(t.date)))].sort();
   const per = months.map(mk => ({ mk, ...monthTotals(txs, mk) }));
-  const full = per.filter(m => m.mk > monthKey(ts.reduce((a, t) => (t.date < a ? t.date : a), '9999')) );
+  const firstM = monthKey(ts.reduce((a, t) => (t.date < a ? t.date : a), '9999')), refM = ref ? monthKey(ref) : '', refPartial = ref && +ref.slice(8, 10) < dim(refM);
+  const full = per.filter(m => m.mk > firstM && !(refPartial && m.mk === refM)); // pierwszy i bieżący miesiąc bywają niepełne
   const income = sum(per.map(m => m.income)), irregular = sum(per.map(m => m.irregular)), spent = sum(per.map(m => m.spent));
   const byCat = {}; for (const m of per) for (const [k, v] of Object.entries(m.byCat)) byCat[k] = (byCat[k] || 0) + v;
   const cats = Object.entries(byCat).filter(([, v]) => v > 0).map(([id, v]) => ({ id, name: (CAT[id] || {}).name || id, v })).sort((a, b) => b.v - a.v);
