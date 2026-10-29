@@ -1,5 +1,8 @@
-import { fmtInt, CATS, CAT, analyze, budgetState, insights, suggestPlan, monthTotals, monthKey, addMonths, dnum, plDate, money } from './engine.js';
+import { forecast, debtView, debtProject, whyMonth, anomalies, inbox, yearSummary, productPrices } from './insight.js';
+import { narrate } from './narrate.js';
+import { fmtInt, setUserRules, normText, CATS, CAT, analyze, budgetState, insights, suggestPlan, monthTotals, monthKey, addMonths, dnum, plDate, money } from './engine.js';
 import { demoData, DEMO_ACCOUNTS } from './demo.js';
+import { applyPeople, personCandidates, personStats, ROLES, normName } from './people.js';
 import { scanReceipt, splitByCategory } from './receipt.js';
 import { decodeBuffer, importFiles, findDuplicates, FIELDS } from './parsers.js';
 
@@ -28,6 +31,7 @@ const I = {
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5zM14 3v5h5M9 13h6M9 17h6"/>',
   cam: '<path d="M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/>',
   pen: '<path d="M4 20l4-1 11-11-3-3L5 16l-1 4zM14 6l3 3"/>',
+  analiza: '<path d="M3 17l5-5 4 4 8-9M15 7h5v5"/>',
   chev: '<path d="M9 6l6 6-6 6"/>',
   gotowka: '<path d="M3 7a2 2 0 0 1 2-2h13v4M3 7v11a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2zM16 14.5h.01"/>',
 };
@@ -35,15 +39,17 @@ const svg = (p, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 
 /* ---------- stan ---------- */
 const KEY = 'budzet.v1';
-const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {} });
-let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; return j; } } catch { } return fresh(); })();
+const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {}, people: [], rules: [], receiptLog: [], debtExtra: 0 });
+let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; j.people = j.people || []; j.rules = j.rules || []; j.receiptLog = j.receiptLog || []; return j; } } catch { } return fresh(); })();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { } };
 const accounts = () => (S.mode === 'demo' ? DEMO_ACCOUNTS : S.accounts);
 const accName = id => (accounts().find(a => a.id === id) || { name: id }).name;
 
 let TX = [], REC = [], BS, INS;
 function rebuild() {
-  TX = (S.mode === 'demo' ? demoData(TODAY) : S.raw).map(t => ({ ...t }));
+  TX = (S.mode === 'demo' ? demoData(TODAY) : S.raw).map(t => ({ ...t, rawName: t.merchant }));
+  if (S.mode !== 'demo') applyPeople(TX, S.people);
+  setUserRules(S.mode === 'demo' ? [] : S.rules);
   REC = analyze(TX, S.overrides, TODAY, accounts().map(a => a.owner).filter(Boolean));
   BS = budgetState(TX, REC, TODAY, S.savings);
   INS = insights(TX, REC, TODAY, BS);
@@ -79,7 +85,7 @@ function empty(title, text, btn) {
 }
 function head(title, sub) {
   return `<div class="top"><div><h1>${esc(title)}</h1>${sub ? `<div class="sub">${esc(sub)}</div>` : ''}</div>
-  <div style="display:flex;gap:8px;align-items:center">${S.mode === 'demo' ? '<span class="pill demo">Demo</span>' : ''}<button class="iconbtn" data-act="settings" aria-label="Ustawienia">${svg(I.gear)}</button></div></div>`;
+  <div style="display:flex;gap:8px;align-items:center">${S.mode === 'demo' ? '<span class="pill demo">Demo</span>' : ''}<button class="iconbtn" data-act="nav" data-to="analiza" aria-label="Analiza">${svg(I.analiza)}</button><button class="iconbtn" data-act="settings" aria-label="Ustawienia">${svg(I.gear)}</button></div></div>`;
 }
 function insCard(i) {
   return `<button class="ins ${i.tone}" data-act="nav" data-to="${i.go}"><span class="g">${svg(I[i.tone])}</span><span style="flex:1"><b>${esc(i.title)}</b><span>${esc(i.body)}</span></span></button>`;
@@ -226,7 +232,7 @@ function vPlan() {
   </div>`;
 }
 
-const VIEWS = { dzis: vDzis, wydatki: vWydatki, gotowka: vGotowka, stale: vStale, plan: vPlan };
+const VIEWS = { analiza: vAnaliza, dzis: vDzis, wydatki: vWydatki, gotowka: vGotowka, stale: vStale, plan: vPlan };
 const TABS = [['dzis', 'Dziś'], ['wydatki', 'Wydatki'], ['gotowka', 'Gotówka'], ['add', ''], ['stale', 'Stałe'], ['plan', 'Plan']];
 
 function renderTabs() {
@@ -332,6 +338,7 @@ function renderReceipt() {
 function saveReceipt() {
   const total = parseFloat(String($('#rTot').value).replace(',', '.')), name = $('#rMer').value.trim() || 'Paragon', date = $('#rDate').value || TODAY, cat = $('#rCat').value, src = $('#rSrc').value;
   if (!(total > 0)) { toast('Podaj kwotę'); return; }
+  S.receiptLog.push({ id: 'r' + Date.now().toString(36), merchant: name, date, total, items: RC.items });
   const parts = $('#rSplit') && $('#rSplit').value === '1' ? splitByCategory(RC.items, total) : [{ cat, amount: total }];
   if (src === 'portfel') {
     for (const p of parts) S.cashLog.push({ id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), date, amount: p.amount, name, cat: p.cat });
@@ -366,6 +373,155 @@ async function restoreBackup(file) {
     if (!j || j.v !== 1 || !Array.isArray(j.raw) || !Array.isArray(j.accounts)) throw 0;
     restoreArm = j; $('#rbmsg').textContent = `Kopia: ${j.raw.length} transakcji, ${j.accounts.length} kont. Dotknij „Przywróć”, żeby zastąpić obecne dane.`; $('#rbgo').hidden = false;
   } catch { toast('To nie jest kopia z Budżetu'); }
+}
+
+/* ---------- analiza ---------- */
+const spark = (vals, w = 320, h = 86) => {
+  if (vals.length < 2) return '';
+  const mn = Math.min(...vals), mx = Math.max(...vals), sp = mx - mn || 1, x = i => (i / (vals.length - 1)) * w, y = v => 6 + (1 - (v - mn) / sp) * (h - 12);
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`), lo = vals.indexOf(mn);
+  return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block"><path d="M0,${h} L${pts.join(' L')} L${w},${h}Z" fill="rgba(46,230,166,.10)"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--acc)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${x(lo).toFixed(1)}" cy="${y(mn).toFixed(1)}" r="4" fill="var(--warn)"/></svg>`;
+};
+const sm = n => (n < 0 ? '\u2212' : '') + money(Math.abs(n));
+const anchorInfo = () => {
+  const acc = S.mode === 'demo' ? [] : S.accounts.filter(a => a.anchor && !(a.anchor.avail && a.anchor.limit == null));
+  if (!acc.length) return null;
+  return { anchor: { date: acc.map(a => a.anchor.date).sort().pop(), v: sum(acc.map(a => a.anchor.v)), limit: acc.every(a => a.limit != null) ? sum(acc.map(a => a.limit)) : null }, acc };
+};
+function vAnaliza() {
+  if (!TX.length) return head('Analiza') + empty('Brak danych', 'Zaimportuj wyciągi z kilku miesięcy, a policzę prognozę, koszty długu i anomalie.', 'Importuj wyciąg');
+  const ai = anchorInfo(), mk = U.am && monthsWithData().includes(U.am) ? U.am : monthsWithData().slice(-1)[0];
+  const fc = ai ? forecast(TX, REC, TODAY, ai.anchor, 35) : null, dv = ai ? debtView(TX, ai.acc, TODAY) : null;
+  const wm = whyMonth(TX, mk), an = anomalies(TX, REC, TODAY), ib = inbox(TX), cands = personCandidates(TX, S.people), pr = productPrices(S.receiptLog || []);
+  const yr = yearSummary(TX, +TODAY.slice(0, 4)), ms = monthsWithData().slice(-5);
+  let h = head('Analiza', 'Liczone z Twoich wyciągów');
+  // 1. prognoza
+  if (fc && !fc.notEnough) {
+    const lim = fc.limit, avail = lim != null ? fc.startBal + lim : null, lowAvail = lim != null ? fc.low.bal + lim : null;
+    h += `<div class="h2">Prognoza salda na 5 tygodni</div><div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="muted small">Dziś (${plDate(fc.start)})</span><b class="num" style="font-size:20px">${sm(fc.startBal)}</b></div>
+      ${spark([fc.startBal, ...fc.series.map(s => s.bal)])}
+      <div class="kv"><span class="muted">Najniżej ${plDate(fc.low.date)}</span><b class="num ${fc.low.bal < 0 ? 'neg' : ''}">${sm(fc.low.bal)}</b></div>
+      <div class="kv"><span class="muted">Za 35 dni (${plDate(fc.end.date)})</span><b class="num ${fc.end.bal < 0 ? 'neg' : ''}">${sm(fc.end.bal)}</b></div>
+      ${lim != null ? `<div class="kv"><span class="muted">Limit debetu</span><b class="num">${money(lim)}</b></div><div class="kv"><span class="muted">Dostępne środki dziś</span><b class="num ${avail < 0 ? 'neg' : ''}">${sm(avail)}</b></div>${lowAvail < 0 ? `<div class="small" style="margin-top:8px;color:var(--warn)">${avail < 0 ? 'Jesteś już ponad limitem debetu. ' : ''}W najniższym punkcie zabraknie ${money(-lowAvail)} do limitu.</div>` : ''}` : ''}
+      <div class="small muted" style="margin-top:10px">Założenia: wpływy z dni miesiąca, w które wpadały w ostatnich ${fc.basedOn.length} mies., znane stałe opłaty i średnie dzienne wydatki ${money(fc.daily)}. To szacunek, nie obietnica.</div></div>`;
+  } else if (!ai) h += `<div class="card flat"><b>Prognoza salda</b><div class="small muted" style="margin-top:4px">Potrzebuję salda konta. Zaimportuj wyciąg MT940 albo CSV z kolumną salda.</div></div>`;
+  // 2. dług
+  if (dv && dv.active) {
+    const extra = S.debtExtra || 0, proj = debtProject(dv.nowBal, dv.delta, extra, 12), lim = ai.anchor.limit;
+    h += `<div class="h2">Dług na koncie</div><div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="muted small">Saldo dziś</span><b class="num neg" style="font-size:22px">${sm(dv.nowBal)}</b></div>
+      ${spark(dv.series.map(s => s.bal))}
+      <div class="small muted" style="display:flex;justify-content:space-between"><span>${mName(dv.series[0].mk)}</span><span>${mName(dv.series[dv.series.length - 1].mk)}</span></div>
+      <div class="kv"><span class="muted">Koszt odsetek i opłat za limit</span><b class="num">${money(dv.avgMonthlyCost)} / mies.</b></div>
+      <div class="kv"><span class="muted">Łącznie w tym okresie</span><b class="num">${money(dv.totalCost)}</b></div>
+      <div class="kv"><span class="muted">Średni dług</span><b class="num">${money(dv.avgDebt)}</b></div>
+      <div class="kv"><span class="muted">Zmiana salda, ostatnie 3 mies.</span><b class="num ${dv.delta < 0 ? 'neg' : 'pos'}">${dv.delta < 0 ? '−' : '+'}${money(Math.abs(dv.delta))} / mies.</b></div>
+      <div class="h2" style="margin:16px 0 6px">Co jeśli odkładasz na spłatę<span class="step"><button data-act="debtx" data-d="-250" aria-label="Mniej">−</button><span class="n">${money(extra)}</span><button data-act="debtx" data-d="250" aria-label="Więcej">+</button></span></div>
+      <div class="kv"><span class="muted">Saldo za 12 mies. przy takim tempie</span><b class="num ${proj[11] < 0 ? 'neg' : 'pos'}">${sm(proj[11])}</b></div>
+      ${proj[11] >= 0 && dv.nowBal < 0 ? `<div class="kv"><span class="muted">Dług spłacony po</span><b class="num">${proj.findIndex(v => v >= 0) + 1} mies.</b></div>` : ''}
+      ${lim != null && dv.nowBal + lim < 0 ? `<div class="small" style="margin-top:8px;color:var(--warn)">Saldo jest ${money(-(dv.nowBal + lim))} poniżej limitu debetu ${money(lim)}.</div>` : ''}
+      <div class="small muted" style="margin-top:8px">Projekcja trzyma ostatnie tempo zmiany salda bez nowych odsetek, więc rzeczywisty wynik będzie nieco gorszy.</div></div>`;
+  }
+  // 3. dlaczego ten miesiąc
+  if (wm) {
+    const cl = c => `<div class="row"><div class="ico" style="background:${(CAT[c.id] || {}).color || 'var(--s3)'}">${letter(c.name)}</div><div class="mid"><div class="t">${esc(c.name)}</div><div class="s">teraz ${money(c.cur)} · średnio ${money(c.avg)}</div></div><div class="amt ${c.diff > 0 ? 'neg' : 'pos'}">${c.diff > 0 ? '+' : '−'}${money(Math.abs(c.diff))}</div></div>`;
+    h += `<div class="h2">Dlaczego ${esc(mName(mk))} wyszedł tak${mk === TODAY.slice(0, 7) ? ` <b>do ${plDate(TODAY)}</b>` : ''}</div><div class="chips">${ms.map(m => `<button class="chip ${m === mk ? 'on' : ''}" data-act="amonth" data-m="${m}">${MSHORT[+m.slice(5, 7) - 1]}</button>`).join('')}</div>
+    <div class="card"><div class="kv"><span class="muted">Wydano</span><b class="num">${money(wm.spent)}</b></div><div class="kv"><span class="muted">Średnio z ${wm.prev.length} mies. wcześniej</span><b class="num">${money(wm.avgSpent)}</b></div><div class="kv"><span class="muted">Wpływy (regularne)</span><b class="num">${money(wm.income)} <small class="muted">śr. ${money(wm.avgIncome)}</small></b></div>
+      ${wm.cats.length ? `<div class="h2" style="margin:14px 0 4px">Gdzie jest różnica</div>${wm.cats.slice(0, 5).map(cl).join('')}` : '<div class="small muted" style="margin-top:10px">Żadna kategoria nie odbiega od średniej o więcej niż 50 zł.</div>'}
+      ${wm.top.length ? `<div class="h2" style="margin:14px 0 4px">Największe wydatki</div>${wm.top.map(t => `<button class="row" data-act="tx" data-id="${esc(t.id)}"><div class="mid"><div class="t">${esc(t.name)}</div><div class="s">${plDate(t.date)}</div></div><div class="amt">${money(t.v)}</div></button>`).join('')}` : ''}
+      ${wm.fresh.length ? `<div class="small muted" style="margin-top:8px">Nowi sprzedawcy: ${wm.fresh.map(f => `${esc(f.name)} ${money(f.v)}`).join(', ')}</div>` : ''}
+      <button class="btn ghost" style="margin-top:14px" data-act="narr" data-t="why" ${gkey() ? '' : 'disabled'}>Opisz słowami (Gemini)</button></div>`;
+  }
+  // 4. anomalie
+  h += `<div class="h2">Anomalie<b class="num">${an.length}</b></div>` + (an.length ? `<div class="card flat">${an.map(a => `<button class="row" ${a.id ? `data-act="tx" data-id="${esc(a.id)}"` : a.key ? `data-act="rec" data-k="${esc(a.key)}"` : ''}><div class="mid"><div class="t" style="white-space:normal">${esc(a.title)}</div><div class="s" style="white-space:normal">${esc(a.body)}</div></div></button>`).join('')}</div>` : '<div class="card flat small muted">Nic nietypowego w ostatnich tygodniach.</div>');
+  // 5. do sprawdzenia, osoby, reguły
+  const nPeople = S.people.length;
+  h += `<div class="h2">Porządkowanie</div><div class="card flat">
+    <button class="row" data-act="inbox"><div class="mid"><div class="t">Do sprawdzenia</div><div class="s">${ib.length} sprzedawców bez kategorii, razem ${money(sum(ib.map(x => x.v)))}</div></div>${svg(I.chev)}</button>
+    <button class="row" data-act="people"><div class="mid"><div class="t">Osoby</div><div class="s">${nPeople} w rejestrze · ${cands.length} do przypisania</div></div>${svg(I.chev)}</button>
+    <button class="row" data-act="rules"><div class="mid"><div class="t">Własne reguły</div><div class="s">${(S.rules || []).length} reguł · ${Object.keys(S.overrides).length} zapamiętanych kategorii</div></div>${svg(I.chev)}</button></div>`;
+  // 6. produkty
+  h += `<div class="h2">Ceny z paragonów</div>` + (pr.length ? `<div class="card flat">${pr.slice(0, 8).map(p => `<div class="row"><div class="mid"><div class="t">${esc(p.name)}</div><div class="s">${plDate(p.first.date)} ${money(p.first.price, 2)} → ${plDate(p.last.date)} ${money(p.last.price, 2)} · najtaniej ${money(p.min.price, 2)} (${esc(p.min.store)})</div></div><div class="amt ${p.change > 0 ? 'neg' : 'pos'}">${p.change > 0 ? '+' : '−'}${Math.round(Math.abs(p.pct) * 100)}%</div></div>`).join('')}</div>` : `<div class="card flat small muted">Gdy zapiszesz kilka paragonów z tymi samymi produktami, pokażę, jak zmieniają się ceny i gdzie jest taniej. Zapisanych paragonów: ${(S.receiptLog || []).length}.</div>`);
+  // 7. rok
+  if (yr) h += `<div class="h2">Rok ${yr.year} (${yr.months} mies. danych)</div><div class="card">
+    <div class="kv"><span class="muted">Regularne wpływy</span><b class="num pos">${money(yr.income)}</b></div><div class="kv"><span class="muted">Wpływy jednorazowe</span><b class="num">${money(yr.irregular)}</b></div><div class="kv"><span class="muted">Wydatki</span><b class="num">${money(yr.spent)}</b></div>
+    <div class="kv"><span class="muted">Bilans</span><b class="num ${yr.net < 0 ? 'neg' : 'pos'}">${yr.net < 0 ? '−' : '+'}${money(Math.abs(yr.net))}</b></div><div class="kv"><span class="muted">Stopa oszczędzania</span><b class="num">${(yr.rate * 100).toFixed(1).replace('.', ',')}%</b></div>
+    ${yr.tax ? `<div class="kv"><span class="muted">Podatki i urzędy</span><b class="num">${money(yr.tax)}</b></div>` : ''}${yr.debtCost ? `<div class="kv"><span class="muted">Koszt długu na koncie</span><b class="num">${money(yr.debtCost)}</b></div>` : ''}
+    ${yr.best ? `<div class="kv"><span class="muted">Najtańszy miesiąc</span><b>${esc(mName(yr.best.mk))} · ${money(yr.best.spent)}</b></div><div class="kv"><span class="muted">Najdroższy miesiąc</span><b>${esc(mName(yr.worst.mk))} · ${money(yr.worst.spent)}</b></div>` : ''}
+    <div class="h2" style="margin:14px 0 4px">Na co poszły pieniądze</div>${yr.cats.slice(0, 6).map(c => `<div class="row"><div class="ico" style="background:${(CAT[c.id] || {}).color || 'var(--s3)'}">${letter(c.name)}</div><div class="mid"><div class="t">${esc(c.name)}</div></div><div class="amt">${money(c.v)}</div></div>`).join('')}
+    <button class="btn ghost" style="margin-top:14px" data-act="narr" data-t="year" ${gkey() ? '' : 'disabled'}>Opisz słowami (Gemini)</button></div>`;
+  return h;
+}
+function narrFacts(kind) {
+  const f = []; const add = (text, ...nums) => f.push({ id: 'f' + (f.length + 1), text, nums });
+  if (kind === 'why') {
+    const mk = U.am && monthsWithData().includes(U.am) ? U.am : monthsWithData().slice(-1)[0], w = whyMonth(TX, mk); if (!w) return [];
+    add(`${mName(mk)}: wydano ${nf(w.spent)} zł`, Math.round(w.spent)); add(`Średnio z ${w.prev.length} wcześniejszych miesięcy wydawano ${nf(w.avgSpent)} zł`, Math.round(w.avgSpent), w.prev.length);
+    for (const c of w.cats.slice(0, 4)) add(`Kategoria ${c.name}: ${nf(c.cur)} zł w tym miesiącu wobec średnio ${nf(c.avg)} zł`, Math.round(c.cur), Math.round(c.avg));
+    for (const t of w.top.slice(0, 3)) add(`Duży wydatek: ${t.name} ${nf(t.v)} zł, ${plDate(t.date)}`, Math.round(t.v));
+  } else {
+    const y = yearSummary(TX, +TODAY.slice(0, 4)); if (!y) return [];
+    add(`Regularne wpływy w ${y.year}: ${nf(y.income)} zł`, Math.round(y.income)); add(`Wydatki w ${y.year}: ${nf(y.spent)} zł`, Math.round(y.spent)); add(`Bilans roku: ${nf(Math.abs(y.net))} zł ${y.net < 0 ? 'na minusie' : 'na plusie'}`, Math.round(Math.abs(y.net)));
+    for (const c of y.cats.slice(0, 3)) add(`Kategoria ${c.name}: ${nf(c.v)} zł`, Math.round(c.v));
+    if (y.debtCost) add(`Koszt długu na koncie: ${nf(y.debtCost)} zł`, Math.round(y.debtCost)); if (y.tax) add(`Podatki i urzędy: ${nf(y.tax)} zł`, Math.round(y.tax));
+  }
+  return f;
+}
+async function runNarr(kind) {
+  const facts = narrFacts(kind); if (!facts.length) { toast('Za mało danych'); return; }
+  openSheet('<h3>Opis słowami</h3><div class="muted small">Gemini dostaje tylko policzone przeze mnie fakty. Zdanie pokażę dopiero po sprawdzeniu każdej liczby.</div><div class="card flat" style="margin-top:16px;height:90px;opacity:.5;animation:pulse 1.2s infinite alternate"></div>');
+  try {
+    const r = await narrate(facts, gkey(), kind === 'why' ? 'dlaczego ten miesiąc wyszedł tak, a nie inaczej' : 'podsumowanie roku');
+    openSheet(`<h3>Opis słowami</h3><div class="muted small">Każda liczba poniżej została sprawdzona z faktami policzonymi przez aplikację.</div>
+    <div class="card flat" style="margin-top:14px">${r.sentences.length ? r.sentences.map(s => `<div style="padding:8px 0;border-top:1px solid var(--line)">${esc(s.text)}</div>`).join('') : '<div class="small muted">Żadne zdanie nie przeszło kontroli, więc niczego nie pokazuję.</div>'}</div>
+    ${r.dropped ? `<div class="small muted" style="margin-top:8px">Odrzucone przez kontrolę: ${r.dropped}</div>` : ''}
+    <div class="h2" style="margin-top:16px">Fakty źródłowe</div><div class="card flat small muted">${facts.map(f => `<div>${esc(f.text)}</div>`).join('')}</div>`);
+  } catch (e) { openSheet(`<h3>Nie wyszło</h3><div class="muted small">${esc(e.message)}</div>`); }
+}
+
+/* ---------- porządkowanie: skrzynka, osoby, reguły ---------- */
+const catChips = (act, extra, cur) => CATS.filter(c => !['dochod', 'nieregularny'].includes(c.id)).map(c => `<button class="chip ${cur === c.id ? 'on' : ''}" data-act="${act}" ${extra} data-c="${c.id}">${esc(c.name)}</button>`).join('');
+function sInbox() {
+  const ib = inbox(TX).slice(0, 12);
+  openSheet(`<h3>Do sprawdzenia</h3><div class="muted small">Sprzedawcy bez kategorii. Wybierz kategorię, a zapamiętam ją dla tego sprzedawcy.</div>
+  ${ib.length ? ib.map(x => `<div class="card flat" style="margin-top:12px"><div style="display:flex;justify-content:space-between"><b>${esc(x.name)}</b><span class="num">${money(x.v)}</span></div><div class="small muted">${x.n} ${x.n === 1 ? 'płatność' : 'płatności'} · ${esc(x.big.merchant)}</div><div class="chips" style="flex-wrap:wrap;margin-top:8px">${catChips('inboxcat', `data-k="${esc(x.key)}"`, '')}</div></div>`).join('') : '<div class="card flat small muted" style="margin-top:14px">Wszystko ma kategorię.</div>'}`);
+}
+function sPeople() {
+  const cands = personCandidates(TX, S.people).slice(0, 15);
+  openSheet(`<h3>Osoby</h3><div class="muted small">Jedna osoba pod kilkoma nazwami w banku. Raz łączysz, a ja stosuję to do całej historii i nowych wyciągów.</div>
+  ${S.people.length ? `<div class="card flat" style="margin-top:12px">${S.people.map(p => { const st = personStats(TX, p); return `<button class="row" data-act="person" data-id="${esc(p.id)}"><div class="ico" style="background:var(--s3);color:var(--tx)">${letter(p.name)}</div><div class="mid"><div class="t">${esc(p.name)}</div><div class="s">${esc(ROLES[p.role] || '')} · wysłane ${money(st.out)} · otrzymane ${money(st.inn)}</div></div>${svg(I.chev)}</button>`; }).join('')}</div>` : ''}
+  ${cands.length ? `<div class="h2">Możliwe osoby w Twoich przelewach</div><div class="card flat">${cands.map((c, i) => `<div class="row"><div class="mid"><div class="t">${esc(c.name)}</div><div class="s">${c.n} × · wysłane ${money(c.out)} · otrzymane ${money(c.inn)}</div></div><button class="chip" data-act="padd" data-i="${i}">Dodaj</button></div>`).join('')}</div>` : ''}`);
+  PC = cands;
+}
+let PC = [];
+function sPerson(id) {
+  const p = S.people.find(x => x.id === id); if (!p) return;
+  const others = personCandidates(TX, S.people).filter(c => normName(c.name) !== normName(p.name)).slice(0, 25);
+  openSheet(`<h3>${esc(p.name)}</h3>
+  <label class="field"><span>Nazwa</span><input id="pName" value="${esc(p.name)}" data-change="pname" data-id="${esc(p.id)}"></label>
+  <div class="h2" style="margin-top:14px">Rola</div><div class="chips" style="flex-wrap:wrap">${Object.entries(ROLES).map(([k, v]) => `<button class="chip ${p.role === k ? 'on' : ''}" data-act="prole" data-id="${esc(p.id)}" data-r="${k}">${v}</button>`).join('')}</div>
+  <div class="small muted" style="margin-top:8px">${p.role === 'partnerka' ? 'Przelewy z partnerką to przepływ w gospodarstwie. Z tytułem „Mieszkanie”, „czynsz” lub „najem” liczą się jako stały koszt mieszkania.' : 'Przelewy do tej osoby liczę w kategorii „Przelewy do osób”, wpływy od niej jako jednorazowe.'}</div>
+  <div class="h2">Inne nazwy tej osoby w banku</div>
+  ${(p.aliases || []).length ? `<div class="chips" style="flex-wrap:wrap">${p.aliases.map((a, i) => `<button class="chip on" data-act="pdelalias" data-id="${esc(p.id)}" data-i="${i}">${esc(a)} ✕</button>`).join('')}</div>` : '<div class="small muted">Brak.</div>'}
+  ${others.length ? `<div class="h2">Dołącz nazwę z Twoich przelewów</div><div class="chips" style="flex-wrap:wrap">${others.map((c, i) => `<button class="chip" data-act="paddalias" data-id="${esc(p.id)}" data-n="${esc(c.name)}">${esc(c.name)}</button>`).join('')}</div>` : ''}
+  <button class="btn ghost" style="margin-top:18px;color:var(--warn)" data-act="pdel" data-id="${esc(p.id)}">Usuń osobę</button>`);
+}
+const savePeople = () => { save(); rebuild(); render(); };
+function sRules() {
+  const ru = S.rules || [], ov = Object.entries(S.overrides);
+  openSheet(`<h3>Własne reguły</h3><div class="muted small">Jeśli opis transakcji zawiera podany tekst, nadaję tę kategorię. Własne reguły mają pierwszeństwo przed wbudowanymi.</div>
+  <label class="field"><span>Tekst w opisie</span><input id="ruText" placeholder="np. endorfina" autocomplete="off" data-change="rupreview"></label>
+  <label class="field"><span>Kategoria</span><select id="ruCat" data-change="rupreview">${CATS.filter(c => !['dochod', 'nieregularny', 'przelew'].includes(c.id)).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+  <div class="small muted" id="ruPrev" style="margin-top:6px"></div>
+  <button class="btn" style="margin-top:12px" data-act="rusave">Dodaj regułę</button>
+  ${ru.length ? `<div class="h2">Twoje reguły</div><div class="card flat">${ru.map((u, i) => `<div class="row"><div class="mid"><div class="t">„${esc(u.text)}”</div><div class="s">${esc((CAT[u.cat] || {}).name || u.cat)}</div></div><button class="chip" data-act="rudel" data-i="${i}">Usuń</button></div>`).join('')}</div>` : ''}
+  ${ov.length ? `<div class="h2">Zapamiętane kategorie<b class="num">${ov.length}</b></div><div class="card flat">${ov.slice(0, 40).map(([k, c]) => `<div class="row"><div class="mid"><div class="t">${esc(k)}</div><div class="s">${esc((CAT[c] || {}).name || c)}</div></div><button class="chip" data-act="ovdel" data-k="${esc(k)}">Usuń</button></div>`).join('')}</div>` : ''}`);
+}
+function rulePreview() {
+  const t = ($('#ruText') || {}).value || '', n = normText(t).trim(); if (!n) { $('#ruPrev').textContent = ''; return; }
+  const m = TX.filter(x => normText(`${x.rawName || x.merchant} ${x.title}`).includes(n));
+  $('#ruPrev').textContent = m.length ? `Pasuje do ${m.length} transakcji, razem ${money(sum(m.map(x => Math.abs(x.amountPLN))))}.` : 'Nic jeszcze nie pasuje.';
 }
 
 /* ---------- arkusze ---------- */
@@ -446,9 +602,15 @@ function commitImport() {
   if (S.mode === 'demo') { S.mode = 'real'; S.raw = []; S.accounts = []; S.overrides = {}; S.plan = {}; S.cancel = {}; }
   let accId = IM.accountId;
   if (accId === 'new') { S.accounts.push({ id: IM.newId, name: (IM.newName || r.bank || 'Konto').trim(), person: IM.newPerson, ...(r.iban ? { iban: r.iban } : {}) }); accId = IM.newId; }
-  const dup = findDuplicates(S.raw, r.txs), add = r.txs.filter(t => !dup.has(t.id)).map(({ id, date, amount, currency, merchant, title, account, person, balance, pending, booked }) => ({ id, date, amount, currency, merchant, title, account, person, balance, ...(booked ? { booked } : {}), ...(pending ? { pending: true } : {}) }));
+  const dup = findDuplicates(S.raw, r.txs), add = r.txs.filter(t => !dup.has(t.id)).map(({ id, date, amount, currency, merchant, title, account, person, balance, pending, booked, code, cp }) => ({ id, date, amount, currency, merchant, title, account, person, balance, ...(code ? { code } : {}), ...(cp ? { cp } : {}), ...(booked ? { booked } : {}), ...(pending ? { pending: true } : {}) }));
   S.raw.push(...add); S.raw = reconcilePending(S.raw);
   const ac = S.accounts.find(a => a.id === accId); if (ac && r.iban && !ac.iban) ac.iban = r.iban;
+  if (ac && r.anchor && (!ac.anchor || r.anchor.date >= ac.anchor.date)) {
+    ac.anchor = { ...r.anchor };
+    if (ac.anchor.limit != null) ac.limit = ac.anchor.limit;
+    else if (ac.anchor.avail && ac.limit != null) { ac.anchor.v = +(ac.anchor.v - ac.limit).toFixed(2); ac.anchor.limit = ac.limit; }
+  }
+  if (ac && r.bals && r.bals.length) { const m = new Map((ac.bals || []).map(b => [b.date, b.v])); for (const b of r.bals) m.set(b.date, b.v); ac.bals = [...m].map(([date, v]) => ({ date, v })).sort((a, b) => a.date.localeCompare(b.date)); }
   if (ac && r.owner && !ac.owner) ac.owner = r.owner; // do rozpoznawania przelewów własnych
   save(); rebuild(); closeSheet();
   const ms = monthsWithData(); U.mk = ms[ms.length - 1]; VIEW = 'dzis'; location.hash = '#dzis'; render(true);
@@ -524,6 +686,7 @@ function sSettings() {
   <button class="btn ghost" style="margin-top:10px" data-act="exportcsv" ${S.mode === 'demo' ? 'disabled' : ''}>Pobierz transakcje (CSV do Excela)</button>
   <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj kopię danych<input type="file" accept=".json,application/json" data-change="rbfile" style="display:none"></label>
   <div class="small muted" id="rbmsg" style="margin-top:8px"></div><button class="btn" id="rbgo" data-act="rbgo" style="margin-top:8px" hidden>Przywróć</button>
+  <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj osoby (plik)<input type="file" accept=".json,application/json" data-change="pfile" style="display:none"></label>
   <label class="field" style="margin-top:14px"><span>Klucz Gemini (paragony)</span><input id="gk2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${gkey() ? 'zapisany: ••••' + esc(gkey().slice(-4)) : 'AIza…'}" data-change="gkey"></label>
   ${S.mode === 'demo' ? '' : '<button class="btn ghost" style="margin-top:10px" data-act="loaddemo">Wróć do danych demo</button>'}
   <button class="btn ghost" style="margin-top:10px;color:var(--warn)" data-act="wipe" ${S.mode === 'demo' ? 'disabled' : ''}>Usuń wszystkie moje dane</button>
@@ -554,6 +717,19 @@ const ACT = {
   pconfirm: () => { const P = planData(); S.plan[P.mk] = { limits: { ...P.limits }, savings: P.savings }; save(); render(); toast('Plan zapisany'); },
   preset: () => { delete S.plan[planMonth()]; save(); render(); toast('Przywrócono propozycję'); },
   sav: d => { S.savings = Math.max(0, S.savings + +d.d); save(); rebuild(); sSettings(); render(); },
+  amonth: d => { U.am = d.m; render(); },
+  debtx: d => { S.debtExtra = Math.max(0, Math.min(20000, (S.debtExtra || 0) + +d.d)); save(); render(); },
+  narr: d => runNarr(d.t),
+  inbox: () => sInbox(), people: () => sPeople(), rules: () => sRules(), person: d => sPerson(d.id),
+  inboxcat: d => { S.overrides[d.k] = d.c; save(); rebuild(); sInbox(); render(); },
+  padd: d => { const c = PC[+d.i]; if (!c) return; S.people.push({ id: 'p' + Date.now().toString(36), name: c.name, role: 'znajomy', aliases: [] }); savePeople(); sPeople(); },
+  prole: d => { const p = S.people.find(x => x.id === d.id); if (p) { p.role = d.r; savePeople(); sPerson(p.id); } },
+  paddalias: d => { const p = S.people.find(x => x.id === d.id); if (p && !(p.aliases || []).includes(d.n)) { p.aliases = [...(p.aliases || []), d.n]; savePeople(); sPerson(p.id); } },
+  pdelalias: d => { const p = S.people.find(x => x.id === d.id); if (p) { p.aliases.splice(+d.i, 1); savePeople(); sPerson(p.id); } },
+  pdel: d => { S.people = S.people.filter(x => x.id !== d.id); savePeople(); sPeople(); },
+  rusave: () => { const text = ($('#ruText').value || '').trim(), cat = $('#ruCat').value; if (text.length < 3) { toast('Wpisz co najmniej 3 znaki'); return; } S.rules.push({ text, cat }); save(); rebuild(); sRules(); render(); toast('Reguła dodana'); },
+  rudel: d => { S.rules.splice(+d.i, 1); save(); rebuild(); sRules(); render(); },
+  ovdel: d => { delete S.overrides[d.k]; save(); rebuild(); sRules(); render(); },
   receipt: () => sReceipt(),
   gksave: () => { const v = $('#gk').value.trim(); if (v.length < 20) { toast('To nie wygląda na klucz'); return; } try { localStorage.setItem(GKEY, v); } catch { toast('Nie mogę zapisać klucza'); return; } sReceipt(); },
   rcsave: () => saveReceipt(),
@@ -569,6 +745,15 @@ document.addEventListener('change', async e => {
   const k = el.dataset.change;
   if (k === 'imacc') { IM.accountId = el.value; IM.picked = true; if (IM.files.length) runImport(); else renderImport(); }
   else if (k === 'rbfile' && el.files[0]) restoreBackup(el.files[0]);
+  else if (k === 'pfile' && el.files[0]) {
+    try {
+      const j = JSON.parse(await el.files[0].text()); if (!j || !Array.isArray(j.people)) throw 0;
+      for (const np of j.people) { if (!np.name) continue; const ex = S.people.find(x => normName(x.name) === normName(np.name)); if (ex) { ex.role = np.role || ex.role; ex.aliases = [...new Set([...(ex.aliases || []), ...(np.aliases || [])])]; } else S.people.push({ id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), name: np.name, role: np.role || 'znajomy', aliases: np.aliases || [] }); }
+      savePeople(); toast('Osoby wczytane');
+    } catch { toast('To nie jest plik z osobami'); }
+  }
+  else if (k === 'pname') { const p = S.people.find(x => x.id === el.dataset.id); if (p && el.value.trim()) { p.name = el.value.trim(); savePeople(); } }
+  else if (k === 'rupreview') rulePreview();
   else if (k === 'gkey') { const v = el.value.trim(); try { if (v) localStorage.setItem(GKEY, v); else localStorage.removeItem(GKEY); } catch { } toast(v ? 'Klucz zapisany' : 'Klucz usunięty'); }
   else if (k === 'rcfile' && el.files[0]) {
     openSheet('<h3>Czytam paragon…</h3><div class="muted small">To trwa kilka sekund.</div><div class="card flat" style="margin-top:16px;height:90px;opacity:.5;animation:pulse 1.2s infinite alternate"></div>');
@@ -580,6 +765,7 @@ document.addEventListener('change', async e => {
     try { IM.files = await Promise.all([...el.files].map(async f => ({ name: f.name, text: decodeBuffer(await f.arrayBuffer()) }))); runImport(); } catch { toast('Nie mogę odczytać pliku'); }
   }
 });
+document.addEventListener('input', e => { if (e.target.id === 'ruText') rulePreview(); });
 addEventListener('hashchange', () => { const v = (location.hash || '#dzis').slice(1); if (VIEWS[v] && v !== VIEW) { VIEW = v; render(true); } else if (VIEWS[v]) render(true); });
 
 /* ---------- start ---------- */

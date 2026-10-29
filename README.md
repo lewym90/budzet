@@ -22,6 +22,7 @@ W repozytorium nie ma żadnych danych finansowych. Wyciągi wczytujesz tylko w a
 - `js/engine.js` kategorie, przelewy własne, stałe opłaty, budżet, wnioski
 - `js/parsers.js` importery CSV i MT940
 - `js/receipt.js` odczyt paragonów przez Gemini
+- `js/people.js` rejestr osób (aliasy, role), `js/insight.js` analizy (prognoza salda, dług, anomalie, rok), `js/narrate.js` opis słowami z walidacją liczb
 - `js/demo.js` dane demo (zmyślone)
 - `js/app.js` interfejs
 - `tools/` testy silnika i zrzuty ekranu (Playwright), nie są potrzebne do działania

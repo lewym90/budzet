@@ -11,6 +11,7 @@ export const CATS = [
   { id: 'zdrowie',     name: 'Zdrowie i uroda',         color: '#9085e9', variable: true },
   { id: 'rozrywka',    name: 'Rozrywka i podróże',      color: '#e66767', variable: true },
   { id: 'gotowka',     name: 'Gotówka',                 color: '#b8a06a', variable: true },
+  { id: 'osoby',       name: 'Przelewy do osób',        color: '#c07ad6', variable: true },
   { id: 'inne',        name: 'Inne',                    color: '#7d8aa3', variable: true },
   { id: 'dochod',      name: 'Wpływy',                  color: '#2ee6a6', variable: false },
   { id: 'przelew',     name: 'Przelew własny',          color: '#7d8aa3', variable: false },
@@ -43,7 +44,7 @@ const RULES = [
   [/PRZELEW WLASNY/, 'Przelew własny', 'inne', null, 0, 0, { own: 1 }],
   [/REVOLUT\*\*|REVOLUT BANK/, 'Revolut (doładowanie)', 'inne', null, 0, 0, { own: 1 }],
   [/KASYNA|LOTERIE|BETCLIC|BEM OPERATIONS|FORTUNA|SUPERBET|\bSTS\b|TOTALIZATOR/, 'Zakłady online', 'rozrywka', null, 0, 0, { offset: 1 }],
-  [/ADYEN|PAYPRO/, 'Wypłaty z serwisów', 'inne', null, 0, 0, { irr: 1 }],
+  [/ADYEN|PAYPRO/, 'Płatności przez PayPro/Adyen', 'inne', null, 0, 0, { irr: 1 }],
   [/APTEKA|ZIKO|\bDOZ\b/, 'Apteka', 'zdrowie'],
   [/LUX ?MED|MEDICOVER|ENEL-?MED/, 'Opieka medyczna', 'zdrowie'],
   [/ROSSMANN|HEBE|SEPHORA|DOUGLAS|BARBER|FRYZJER|KOSMETYK/, 'Uroda i drogeria', 'zdrowie'],
@@ -100,10 +101,19 @@ const RULES = [
 
 const strip = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ł/g, 'l').replace(/Ł/g, 'L');
 const ruleCache = new Map();
+let USER_RULES = [];
+// własne reguły użytkownika: [{ text, name, cat }] — tekst zawarty w opisie transakcji (bez diakrytyków i wielkości liter)
+export function setUserRules(list) {
+  USER_RULES = (list || []).map(u => ({ text: strip(u.text).toUpperCase().trim(), name: u.name || u.text, cat: u.cat })).filter(u => u.text && CAT[u.cat]);
+  ruleCache.clear();
+}
+export const normText = s => strip(s).toUpperCase();
 export function matchRule(raw) {
   const s = strip(raw).toUpperCase();
   if (ruleCache.has(s)) return ruleCache.get(s);
   let r = null;
+  for (const u of USER_RULES) if (s.includes(u.text)) { r = { name: u.name, cat: u.cat, tag: null, sub: false, fixed: false, user: true }; break; }
+  if (r) { ruleCache.set(s, r); return r; }
   for (const [re, name, cat, tag, sub, fixed, o] of RULES) {
     if (re.test(s)) { r = { name, cat, tag: tag || null, sub: !!sub, fixed: !!fixed, ...(o || {}) }; break; }
   }
@@ -153,11 +163,35 @@ export function prepare(t, overrides = {}) {
   t.cat = overrides[t.mkey] || (t.amountPLN > 0 ? 'dochod' : rule ? rule.cat : 'inne');
   t.tag = rule ? rule.tag : null;
   t.own = !!(rule && rule.own) || isOwnName(t) || t.cat === 'przelew';
+  personEffects(t, overrides);
   t.irr = t.amountPLN > 0 && (!!(rule && rule.irr) || t.cat === 'nieregularny');
   t.offset = t.amountPLN > 0 && !!(rule && rule.offset);
   if (t.offset) t.cat = rule.cat;
+  if (t.amountPLN > 0 && rule && !rule.irr && !rule.offset && !rule.own && !rule.person) {
+    if (FREE_CATS.has(rule.cat) || rule.cat === 'subskrypcje') { t.offset = true; t.cat = rule.cat; } // zwrot ze sklepu pomniejsza wydatki
+    else { t.rule = null; t.name = cleanName(t.merchant || t.title); t.mkey = merchantKey(t.merchant || t.title); t.tag = null; t.cat = overrides[t.mkey] || 'dochod'; } // reguła kosztowa nie opisuje wpływu
+  }
   return t;
 }
+
+const P2P = t => /^(WDW5|IP2B)$/.test(t.code || '') || /przelew na telefon|blik.*telefon/i.test(t.title || '');
+// przelewy do osób: nie są sklepami ani wpływami z pracy. Partnerka: czynsz to stały koszt, reszta to przepływ wewnątrz gospodarstwa.
+function personEffects(t, overrides) {
+  const out = t.amountPLN < 0;
+  if (t.prole === 'partnerka') {
+    if (out && /MIESZKAN|CZYNSZ|NAJEM|\bRENT\b/.test(strip(t.title).toUpperCase())) {
+      t.rule = { name: 'Czynsz (przelew do partnerki)', cat: 'mieszkanie', tag: null, sub: false, fixed: true };
+      t.mkey = 'CZYNSZ PARTNERKA'; t.name = t.rule.name; t.cat = overrides[t.mkey] || 'mieszkanie'; t.own = false; t.tag = null;
+    } else { t.own = true; t.name = t.merchant; }
+    return;
+  }
+  if (!t.own && !(t.rule && !t.rule.person) && (t.pid || P2P(t))) {
+    t.rule = { name: t.merchant, cat: 'osoby', tag: 'Osoby', sub: false, fixed: false, person: true };
+    t.mkey = 'OSOBA ' + normKey(t.merchant); t.name = t.merchant; t.tag = 'Osoby';
+    if (out) t.cat = overrides[t.mkey] || 'osoby'; else { t.cat = 'nieregularny'; t.irr = true; }
+  }
+}
+const normKey = s => strip(s).toUpperCase().replace(/[^A-Z ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 // przelewy między własnymi kontami: nie są ani wydatkiem, ani wpływem
 export function detectTransfers(txs) {
@@ -185,7 +219,7 @@ const PERIODS = [
   { id: 'quarterly', label: 'co kwartał',   lo: 85,  hi: 97,  tol: 8,  factor: 1 / 3 },
   { id: 'yearly',    label: 'rocznie',      lo: 350, hi: 380, tol: 20, factor: 1 / 12 },
 ];
-const FREE_CATS = new Set(['jedzenie', 'restauracje', 'transport', 'zakupy', 'zdrowie', 'rozrywka']);
+const FREE_CATS = new Set(['osoby', 'jedzenie', 'restauracje', 'transport', 'zakupy', 'zdrowie', 'rozrywka']);
 
 // stałe opłaty i subskrypcje: ten sam sprzedawca, regularny odstęp, podobna kwota
 function detectGroup(arr, key, name, today) {
@@ -201,6 +235,7 @@ function detectGroup(arr, key, name, today) {
   const P = PERIODS.find(p => g >= p.lo && g <= p.hi);
   if (!P) return null;
   if (gaps.filter(x => Math.abs(x - g) <= P.tol + 1).length / gaps.length < 0.7) return null;
+  if (P.id === 'monthly' && new Set(arr.map(t => t.date.slice(0, 7))).size < 3) return null; // co najmniej 3 różne miesiące
   const amts = arr.map(t => -t.amountPLN), n = amts.length;
   let priceChange = null;
   if (n >= 4) {
@@ -416,10 +451,19 @@ export function dedupeKey(t) {
 }
 
 // przetwarza całość: kategorie, przelewy własne, stałe opłaty
+// wpływ jest regularny (np. pensja), jeśli to samo źródło pojawia się w co najmniej 3 różnych miesiącach; reszta to wpływy jednorazowe
+function markIrregularIncome(txs) {
+  const months = new Set(txs.map(t => t.date.slice(0, 7)));
+  if (months.size < 3) return;
+  const g = new Map();
+  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr) { const a = g.get(t.mkey) || new Set(); a.add(t.date.slice(0, 7)); g.set(t.mkey, a); }
+  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr && g.get(t.mkey).size < 3) { t.irr = true; t.cat = 'nieregularny'; }
+}
 export function analyze(txs, overrides, today, owners) {
   if (owners) setOwners(owners);
   for (const t of txs) { delete t.recKey; prepare(t, overrides); }
   detectTransfers(txs);
+  markIrregularIncome(txs);
   const rec = detectRecurring(txs, today);
   return rec;
 }

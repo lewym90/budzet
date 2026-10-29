@@ -52,3 +52,16 @@ console.log('\nMT940:', m1.bank, m1.iban, 'tx=' + m1.txs.length, 'salda ok=' + m
 for (const x of m1.txs) console.log('  ', x.date, x.booked || '', x.amount, x.merchant, '|', x.title);
 console.assert(m1.txs.length === 2 && m1.balance.ok && m1.txs[0].date === '2026-10-01' && m1.txs[0].booked === '2026-10-02', 'MT940 zły wynik');
 console.assert(fd(m1.txs, m1.txs).size === 2, 'duplikaty MT940');
+
+// --- osoby i cykliczność (zmyślone dane) ---
+import { applyPeople } from '../js/people.js';
+import { analyze as an2 } from '../js/engine.js';
+const mk = (d, a, m, t) => ({ id: d + m + a, date: d, amount: a, currency: 'PLN', merchant: m, title: t, account: 'x', person: 'ja', balance: null });
+const ppl = [{ id: 'p1', name: 'Anna Test', role: 'partnerka', aliases: ['Kotek'] }];
+const rent = ['2026-07-05', '2026-08-05', '2026-09-05'].map((d, i) => mk(d, -2000, i === 1 ? 'Kotek' : 'ANNA TEST', 'Mieszkanie'));
+const phone = ['2026-07-03', '2026-08-20', '2026-09-11'].map(d => mk(d, -100, 'Jan Kowalski', 'Przelew na telefon +48xxxxxx111'));
+const all = [...rent, ...phone]; applyPeople(all, ppl);
+const rc = an2(all, {}, '2026-09-30');
+console.assert(rc.some(r => r.name.startsWith('Czynsz') && r.count === 3), 'czynsz partnerki powinien być stałą opłatą');
+console.assert(!rc.some(r => /Kowalski/.test(r.name)), 'przelewy BLIK do osób nie są cykliczne');
+console.log('\nOSOBY/CYKLICZNOŚĆ ok:', rc.map(r => r.name + ' ' + r.count).join(', '));

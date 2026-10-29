@@ -189,7 +189,10 @@ export function importCSV(text, { account = 'konto', person = 'ja', mapping = nu
   // numer rachunku z nagłówka (ING: „Wybrane rachunki”), żeby kolejny plik trafiał na to samo konto
   let iban = null;
   for (const r of rows.slice(0, hi)) { for (const c of r) { const m = String(c).match(/\b(\d{2}(?:\s?\d{4}){6})\b/); if (m) { iban = 'PL' + m[1].replace(/\s/g, ''); break; } } if (iban) break; }
-  return { ...base, needsMapping: false, txs, skipped, check, owner, iban };
+  // saldo „kotwica”: saldo po ostatniej chronologicznie transakcji (plik może być malejąco lub rosnąco)
+  const withBal = txs.filter(t => t.balance != null && !t.pending); let anchor = null;
+  if (withBal.length) { const desc = txs[0].date >= txs[txs.length - 1].date, a = desc ? withBal[0] : withBal[withBal.length - 1]; anchor = { date: a.booked || a.date, v: a.balance, avail: base.bank === 'ING' }; } // ING w CSV podaje saldo razem z limitem debetu (dostępne środki)
+  return { ...base, needsMapping: false, txs, skipped, check, owner, iban, anchor };
 }
 
 /* ---------- MT940 (.sta, .mt940) ----------
@@ -279,7 +282,7 @@ export function parseMT940(text, { account = 'konto', person = 'ja' } = {}) {
         const m = /(\d{2})\.(\d{2})\.(\d{4})/.exec(title);
         if (m) { const dd = `${m[3]}-${m[2]}-${m[1]}`, diff = (Date.parse(r.booked) - Date.parse(dd)) / 864e5; if (diff >= -3 && diff <= 14) date = dd; }
       }
-      const t = { date, amount: r.amount, currency: cur0, merchant: name || title, title: name ? title : '', account, person, balance: null };
+      const t = { date, amount: r.amount, currency: cur0, merchant: name || title, title: name ? title : '', account, person, balance: null, code: d.code || undefined, ...(d.ibanOther ? { cp: d.ibanOther } : {}) };
       if (r.booked !== date) t.booked = r.booked;
       const k = [s.iban || '', r.ref, r.booked, r.amount.toFixed(2), d.code].join('|'), n = (seen.get(k) || 0) + 1; seen.set(k, n);
       t.id = hash(k + '#' + n);
@@ -293,7 +296,8 @@ export function parseMT940(text, { account = 'konto', person = 'ja' } = {}) {
   }
   const ibans = [...new Set(statements.map(s => s.iban).filter(Boolean))];
   const code = ibans[0] ? ibans[0].slice(4, 8) : '';
-  return { format: 'MT940', bank: BANK_CODES[code] || 'MT940', needsMapping: false, txs, skipped: [], statements, owner, iban: ibans.length === 1 ? ibans[0] : null, ibans, check: null };
+  const lastSt = [...statements].filter(x => x.closing).sort((a, b) => a.closing.date.localeCompare(b.closing.date)).pop();
+  return { format: 'MT940', anchor: lastSt ? { date: lastSt.closing.date, v: lastSt.closing.amount, ...(lastSt.available ? { limit: Math.round(lastSt.available.amount - lastSt.closing.amount) } : {}) } : null, bank: BANK_CODES[code] || 'MT940', needsMapping: false, txs, skipped: [], statements, owner, iban: ibans.length === 1 ? ibans[0] : null, ibans, check: null };
 }
 
 /* ---------- wiele plików naraz ----------
@@ -331,6 +335,14 @@ export function importFiles(files, { account = 'konto', person = 'ja', mapping =
   return {
     needsMapping: false, files: parts, unreadable, txs, skipped: good.flatMap(p => p.skipped || []),
     bank: banks.length === 1 ? banks[0] : banks.length ? 'Kilka banków' : 'Nieznany bank', banks, formats: [...new Set(good.map(p => p.format))],
+    anchor: (() => {
+      const all = good.map(p => p.anchor).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date)), a = all[all.length - 1];
+      if (!a) return null;
+      const lim = [...all].reverse().find(x => x.limit != null);
+      if (a.avail && lim) return { date: a.date, v: +(a.v - lim.limit).toFixed(2), limit: lim.limit };
+      return a;
+    })(),
+    bals: statements.filter(s => s.closing).map(s => ({ date: s.closing.date, v: s.closing.amount })),
     iban: ibans.length === 1 ? ibans[0] : null, ibans, owner: good.map(p => p.owner).find(Boolean) || null,
     check: csvChecks.length ? { ok: csvChecks.every(c => c.ok), count: csvChecks.length } : null, balance, statements,
   };
