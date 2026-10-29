@@ -21,7 +21,7 @@ async def main():
             await pg.screenshot(path=str(out/f'r-{v}.png'), full_page=False)
         # Wydatki: pełna strona (przewiń kategorię)
         await pg.evaluate("location.hash='#stale'"); await pg.wait_for_timeout(1500)
-        await pg.evaluate("document.querySelector('#view').scrollTop=520"); await pg.wait_for_timeout(500)
+        await pg.evaluate("window.scrollTo(0,520)"); await pg.wait_for_timeout(500)
         await pg.screenshot(path=str(out/'r-stale2.png'))
         print('ERRORS:', errs); await b.close()
 asyncio.run(main()); srv.terminate()

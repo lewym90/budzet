@@ -228,24 +228,24 @@ const VIEWS = { dzis: vDzis, wydatki: vWydatki, stale: vStale, plan: vPlan };
 const TABS = [['dzis', 'Dziś'], ['wydatki', 'Wydatki'], ['add', ''], ['stale', 'Stałe'], ['plan', 'Plan']];
 
 function renderTabs() {
-  $('#tabs').innerHTML = TABS.map(([id, l]) => id === 'add'
+  $('#tabs').innerHTML = '<div class="in">' + TABS.map(([id, l]) => id === 'add'
     ? `<button class="plus" data-act="add" aria-label="Dodaj">${svg(I.plus, 2.4)}</button>`
-    : `<button class="${VIEW === id ? 'on' : ''}" data-act="nav" data-to="${id}" ${VIEW === id ? 'aria-current="page"' : ''}>${svg(I[id])}<span>${l}</span></button>`).join('');
+    : `<button class="${VIEW === id ? 'on' : ''}" data-act="nav" data-to="${id}" ${VIEW === id ? 'aria-current="page"' : ''}>${svg(I[id])}<span>${l}</span></button>`).join('') + '</div>';
 }
 function render(first = false) {
   if (!VIEWS[VIEW]) VIEW = 'dzis';
-  const v = $('#view'), st = v.scrollTop;
+  const v = $('#view'), st = scrollY;
   v.className = first ? 'enter' : '';
   v.innerHTML = VIEWS[VIEW]();
-  v.scrollTop = first ? 0 : st;
+  scrollTo(0, first ? 0 : st);
   mount(first);
   renderTabs();
 }
 
 /* ---------- arkusze ---------- */
 const sheet = $('#sheet'), pane = sheet.querySelector('.pane');
-function openSheet(html) { pane.innerHTML = `<div class="grab"></div>${html}`; sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false'); pane.scrollTop = 0; }
-function closeSheet() { sheet.classList.remove('open'); sheet.setAttribute('aria-hidden', 'true'); }
+function openSheet(html) { pane.innerHTML = `<div class="grab"></div>${html}`; sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false'); pane.scrollTop = 0; document.documentElement.classList.add('lock'); }
+function closeSheet() { sheet.classList.remove('open'); sheet.setAttribute('aria-hidden', 'true'); document.documentElement.classList.remove('lock'); }
 sheet.querySelector('.back').addEventListener('click', closeSheet);
 addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 let toastT;
