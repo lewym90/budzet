@@ -534,9 +534,17 @@ function rulePreview() {
 
 /* ---------- arkusze ---------- */
 const sheet = $('#sheet'), pane = sheet.querySelector('.pane');
-function openSheet(html) { pane.innerHTML = `<div class="grab"></div>${html}`; sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false'); pane.scrollTop = 0; document.documentElement.classList.add('lock'); }
+function openSheet(html) { pane.innerHTML = `<div class="sheethead"><div class="grab"></div><button class="sclose" type="button" data-sclose aria-label="Zamknij">← Wstecz</button></div>${html}`; sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false'); pane.scrollTop = 0; document.documentElement.classList.add('lock'); }
 function closeSheet() { sheet.classList.remove('open'); sheet.setAttribute('aria-hidden', 'true'); document.documentElement.classList.remove('lock'); }
 sheet.querySelector('.back').addEventListener('click', closeSheet);
+pane.addEventListener('click', e => { if (e.target.closest('[data-sclose]')) closeSheet(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && sheet.classList.contains('open')) closeSheet(); });
+// przeciągnięcie paska w dół zamyka okno
+(() => { let y0 = null, dy = 0;
+  pane.addEventListener('touchstart', e => { const h = e.target.closest('.sheethead'); y0 = h && !e.target.closest('[data-sclose]') ? e.touches[0].clientY : null; dy = 0; pane.style.transition = 'none'; }, { passive: true });
+  pane.addEventListener('touchmove', e => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); pane.style.transform = `translateY(${dy}px)`; }, { passive: true });
+  pane.addEventListener('touchend', () => { if (y0 == null) { pane.style.transition = ''; return; } pane.style.transition = ''; pane.style.transform = ''; if (dy > 70) closeSheet(); y0 = null; dy = 0; });
+})();
 addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
 let toastT;
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), 2600); }
