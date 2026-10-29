@@ -297,7 +297,9 @@ export function parseMT940(text, { account = 'konto', person = 'ja' } = {}) {
   const ibans = [...new Set(statements.map(s => s.iban).filter(Boolean))];
   const code = ibans[0] ? ibans[0].slice(4, 8) : '';
   const lastSt = [...statements].filter(x => x.closing).sort((a, b) => a.closing.date.localeCompare(b.closing.date)).pop();
-  return { format: 'MT940', anchor: lastSt ? { date: lastSt.closing.date, v: lastSt.closing.amount, ...(lastSt.available ? { limit: Math.round(lastSt.available.amount - lastSt.closing.amount) } : {}) } : null, bank: BANK_CODES[code] || 'MT940', needsMapping: false, txs, skipped: [], statements, owner, iban: ibans.length === 1 ? ibans[0] : null, ibans, check: null };
+  return { format: 'MT940', anchor: lastSt ? { date: lastSt.closing.date, v: lastSt.closing.amount } : null,
+    // dostępne środki = saldo + limit − blokady kart, więc różnica jest tylko dolnym oszacowaniem limitu
+    limitGuess: statements.filter(x => x.closing && x.available).reduce((m, x) => Math.max(m, x.available.amount - x.closing.amount), 0) || null, bank: BANK_CODES[code] || 'MT940', needsMapping: false, txs, skipped: [], statements, owner, iban: ibans.length === 1 ? ibans[0] : null, ibans, check: null };
 }
 
 /* ---------- wiele plików naraz ----------
@@ -335,13 +337,8 @@ export function importFiles(files, { account = 'konto', person = 'ja', mapping =
   return {
     needsMapping: false, files: parts, unreadable, txs, skipped: good.flatMap(p => p.skipped || []),
     bank: banks.length === 1 ? banks[0] : banks.length ? 'Kilka banków' : 'Nieznany bank', banks, formats: [...new Set(good.map(p => p.format))],
-    anchor: (() => {
-      const all = good.map(p => p.anchor).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date)), a = all[all.length - 1];
-      if (!a) return null;
-      const lim = [...all].reverse().find(x => x.limit != null);
-      if (a.avail && lim) return { date: a.date, v: +(a.v - lim.limit).toFixed(2), limit: lim.limit };
-      return a;
-    })(),
+    anchor: (() => { const all = good.map(p => p.anchor).filter(Boolean).sort((a, b) => a.date.localeCompare(b.date)); return all[all.length - 1] || null; })(),
+    limitGuess: (() => { const g = Math.max(0, ...good.map(p => p.limitGuess || 0)); return g > 0 ? Math.ceil(g / 1000) * 1000 : null; })(),
     bals: statements.filter(s => s.closing).map(s => ({ date: s.closing.date, v: s.closing.amount })),
     iban: ibans.length === 1 ? ibans[0] : null, ibans, owner: good.map(p => p.owner).find(Boolean) || null,
     check: csvChecks.length ? { ok: csvChecks.every(c => c.ok), count: csvChecks.length } : null, balance, statements,

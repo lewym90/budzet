@@ -41,7 +41,9 @@ const svg = (p, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 /* ---------- stan ---------- */
 const KEY = 'budzet.v1';
 const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {}, people: [], rules: [], receiptLog: [], debtExtra: 0, recIgnore: [] });
-let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; j.people = j.people || []; j.rules = j.rules || []; j.receiptLog = j.receiptLog || []; j.recIgnore = j.recIgnore || []; return j; } } catch { } return fresh(); })();
+let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; j.people = j.people || []; j.rules = j.rules || []; j.receiptLog = j.receiptLog || []; j.recIgnore = j.recIgnore || [];
+      // starsza wersja zapisywała saldo już po odjęciu oszacowanego limitu
+      for (const a of j.accounts || []) if (a.anchor && a.anchor.limit != null) { if (a.anchor.avail) a.anchor.v = +(a.anchor.v + a.anchor.limit).toFixed(2); delete a.anchor.limit; if (!a.limitManual && a.limit) a.limit = Math.ceil(a.limit / 1000) * 1000; } return j; } } catch { } return fresh(); })();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { toast('Nie mogę zapisać danych (brak miejsca w przeglądarce). Pobierz kopię w ustawieniach.'); } };
 const accounts = () => (S.mode === 'demo' ? DEMO_ACCOUNTS : S.accounts);
 const accName = id => (accounts().find(a => a.id === id) || { name: id }).name;
@@ -385,10 +387,12 @@ const spark = (vals, w = 320, h = 86) => {
   return `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block"><path d="M0,${h} L${pts.join(' L')} L${w},${h}Z" fill="rgba(46,230,166,.10)"/><polyline points="${pts.join(' ')}" fill="none" stroke="var(--acc)" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="${x(lo).toFixed(1)}" cy="${y(mn).toFixed(1)}" r="4" fill="var(--warn)"/></svg>`;
 };
 const sm = n => (n < 0 ? '\u2212' : '') + money(Math.abs(n));
+// saldo „kotwica” konta; ING w CSV podaje dostępne środki = saldo + limit − blokady kart, więc saldo ≈ dostępne − limit (blokady kart to zwykle kilkadziesiąt zł; dokładną wartość można wpisać w Ustawieniach)
+const effAnchor = a => (a.anchor.avail ? (a.limit != null ? { ...a.anchor, v: +(a.anchor.v - a.limit).toFixed(2) } : null) : a.anchor);
 const anchorInfo = () => {
-  const acc = S.mode === 'demo' ? [] : S.accounts.filter(a => a.anchor && !(a.anchor.avail && a.anchor.limit == null));
+  const acc = (S.mode === 'demo' ? [] : S.accounts).map(a => (a.anchor ? { ...a, anchor: effAnchor(a) } : a)).filter(a => a.anchor);
   if (!acc.length) return null;
-  return { anchor: { date: acc.map(a => a.anchor.date).sort().pop(), v: sum(acc.map(a => a.anchor.v)), limit: acc.every(a => a.limit != null) ? sum(acc.map(a => a.limit)) : null }, acc };
+  return { anchor: { date: acc.map(a => a.anchor.date).sort().pop(), v: sum(acc.map(a => a.anchor.v)), limit: acc.every(a => a.limit != null) ? sum(acc.map(a => a.limit)) : null, manual: acc.every(a => a.limitManual) }, acc };
 };
 function vAnaliza() {
   if (!TX.length) return head('Analiza') + empty('Brak danych', 'Zaimportuj wyciągi z kilku miesięcy, a policzę prognozę, koszty długu i anomalie.', 'Importuj wyciąg');
@@ -405,7 +409,7 @@ function vAnaliza() {
       ${spark([fc.startBal, ...fc.series.map(s => s.bal)])}
       <div class="kv"><span class="muted">Najniżej ${plDate(fc.low.date)}</span><b class="num ${fc.low.bal < 0 ? 'neg' : ''}">${sm(fc.low.bal)}</b></div>
       <div class="kv"><span class="muted">Za 35 dni (${plDate(fc.end.date)})</span><b class="num ${fc.end.bal < 0 ? 'neg' : ''}">${sm(fc.end.bal)}</b></div>
-      ${lim != null ? `<div class="kv"><span class="muted">Limit debetu</span><b class="num">${money(lim)}</b></div><div class="kv"><span class="muted">Dostępne środki dziś</span><b class="num ${avail < 0 ? 'neg' : ''}">${sm(avail)}</b></div>${lowAvail < 0 ? `<div class="small" style="margin-top:8px;color:var(--warn)">${avail < 0 ? 'Jesteś już ponad limitem debetu. ' : ''}W najniższym punkcie zabraknie ${money(-lowAvail)} do limitu.</div>` : ''}` : ''}
+      ${lim != null ? `<div class="kv"><span class="muted">Limit debetu${ai.anchor.manual ? '' : ' (szacunek, popraw w Ustawieniach)'}</span><b class="num">${money(lim)}</b></div><div class="kv"><span class="muted">Dostępne środki dziś</span><b class="num ${avail < 0 ? 'neg' : ''}">${sm(avail)}</b></div>${lowAvail < 0 ? `<div class="small" style="margin-top:8px;color:var(--warn)">${avail < 0 ? 'Jesteś już ponad limitem debetu. ' : ''}W najniższym punkcie zabraknie ${money(-lowAvail)} do limitu.</div>` : ''}` : ''}
       <div class="small muted" style="margin-top:10px">Założenia: wpływy z dni miesiąca, w które wpadały w ostatnich ${fc.basedOn.length} mies., znane stałe opłaty i średnie dzienne wydatki ${money(fc.daily)}. To szacunek, nie obietnica.</div></div>`;
   } else if (!ai) h += `<div class="card flat"><b>Prognoza salda</b><div class="small muted" style="margin-top:4px">Potrzebuję salda konta. Zaimportuj wyciąg MT940 albo CSV z kolumną salda.</div></div>`;
   // 2. dług
@@ -609,11 +613,10 @@ function commitImport() {
   const dup = findDuplicates(S.raw, r.txs), add = r.txs.filter(t => !dup.has(t.id)).map(({ id, date, amount, currency, merchant, title, account, person, balance, pending, booked, code, cp }) => ({ id, date, amount, currency, merchant, title, account, person, balance, ...(code ? { code } : {}), ...(cp ? { cp } : {}), ...(booked ? { booked } : {}), ...(pending ? { pending: true } : {}) }));
   S.raw.push(...add); S.raw = reconcilePending(S.raw);
   const ac = S.accounts.find(a => a.id === accId); if (ac && r.iban && !ac.iban) ac.iban = r.iban;
-  if (ac && r.anchor && (!ac.anchor || r.anchor.date >= ac.anchor.date)) {
+  if (ac && r.anchor && (!ac.anchor || (ac.anchor.manual ? r.anchor.date > ac.anchor.date : r.anchor.date >= ac.anchor.date))) {
     ac.anchor = { ...r.anchor };
-    if (ac.anchor.limit != null) ac.limit = ac.anchor.limit;
-    else if (ac.anchor.avail && ac.limit != null) { ac.anchor.v = +(ac.anchor.v - ac.limit).toFixed(2); ac.anchor.limit = ac.limit; }
   }
+  if (ac && r.limitGuess && !ac.limitManual) ac.limit = Math.max(ac.limit || 0, r.limitGuess); // szacunek do czasu, aż użytkownik poda limit
   if (ac && r.bals && r.bals.length) { const m = new Map((ac.bals || []).map(b => [b.date, b.v])); for (const b of r.bals) m.set(b.date, b.v); ac.bals = [...m].map(([date, v]) => ({ date, v })).sort((a, b) => a.date.localeCompare(b.date)); }
   if (ac && r.owner && !ac.owner) ac.owner = r.owner; // do rozpoznawania przelewów własnych
   save(); rebuild(); closeSheet();
@@ -692,6 +695,8 @@ function sSettings() {
   <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj kopię danych<input type="file" accept=".json,application/json" data-change="rbfile" style="display:none"></label>
   <div class="small muted" id="rbmsg" style="margin-top:8px"></div><button class="btn" id="rbgo" data-act="rbgo" style="margin-top:8px" hidden>Przywróć</button>
   <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj osoby (plik)<input type="file" accept=".json,application/json" data-change="pfile" style="display:none"></label>
+  ${S.mode === 'demo' ? '' : S.accounts.filter(a => a.anchor && a.anchor.avail || a.limit != null).map(a => `<label class="field" style="margin-top:10px"><span>Limit debetu: ${esc(a.name)} (zł)</span><input inputmode="decimal" value="${a.limit != null ? a.limit : ''}" placeholder="np. 30000" data-change="limit" data-id="${esc(a.id)}"></label>`).join('')}
+  ${S.mode === 'demo' ? '' : S.accounts.filter(a => a.anchor).map(a => { const e = effAnchor(a); return e ? `<label class="field" style="margin-top:10px"><span>Saldo bieżące: ${esc(a.name)} (zł, z aplikacji banku)</span><input inputmode="decimal" value="${String(e.v).replace('.', ',')}" data-change="balset" data-id="${esc(a.id)}"></label>` : ''; }).join('')}
   <label class="field" style="margin-top:14px"><span>Klucz Gemini (paragony)</span><input id="gk2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${gkey() ? 'zapisany: ••••' + esc(gkey().slice(-4)) : 'AIza…'}" data-change="gkey"></label>
   ${S.mode === 'demo' ? '' : '<button class="btn ghost" style="margin-top:10px" data-act="loaddemo">Wróć do danych demo</button>'}
   <button class="btn ghost" style="margin-top:10px;color:var(--warn)" data-act="wipe" ${S.mode === 'demo' ? 'disabled' : ''}>Usuń wszystkie moje dane</button>
@@ -759,6 +764,8 @@ document.addEventListener('change', async e => {
       savePeople(); toast('Osoby wczytane');
     } catch { toast('To nie jest plik z osobami'); }
   }
+  else if (k === 'limit') { const a = S.accounts.find(x => x.id === el.dataset.id); const v = parseFloat(String(el.value).replace(/\s/g, '').replace(',', '.')); if (a && v >= 0) { a.limit = v; a.limitManual = true; save(); rebuild(); render(); toast('Limit zapisany'); } }
+  else if (k === 'balset') { const a = S.accounts.find(x => x.id === el.dataset.id); const v = parseFloat(String(el.value).replace(/\s|\u00a0|\u2212/g, m => (m === '\u2212' ? '-' : '')).replace(',', '.')); if (a && !isNaN(v)) { const last = S.raw.filter(t => t.account === a.id && !t.pending).reduce((m, t) => ((t.booked || t.date) > m ? (t.booked || t.date) : m), ''); a.anchor = { date: last || (a.anchor && a.anchor.date) || TODAY, v, manual: true }; save(); rebuild(); render(); toast('Saldo zapisane'); } }
   else if (k === 'pname') { const p = S.people.find(x => x.id === el.dataset.id); if (p && el.value.trim()) { p.name = el.value.trim(); savePeople(); } }
   else if (k === 'rupreview') rulePreview();
   else if (k === 'gkey') { const v = el.value.trim(); try { if (v) localStorage.setItem(GKEY, v); else localStorage.removeItem(GKEY); } catch { } toast(v ? 'Klucz zapisany' : 'Klucz usunięty'); }
