@@ -694,7 +694,7 @@ function sSettings() {
   <button class="btn ghost" style="margin-top:10px" data-act="exportcsv" ${S.mode === 'demo' ? 'disabled' : ''}>Pobierz transakcje (CSV do Excela)</button>
   <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj kopię danych<input type="file" accept=".json,application/json" data-change="rbfile" style="display:none"></label>
   <div class="small muted" id="rbmsg" style="margin-top:8px"></div><button class="btn" id="rbgo" data-act="rbgo" style="margin-top:8px" hidden>Przywróć</button>
-  <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj osoby (plik)<input type="file" accept=".json,application/json" data-change="pfile" style="display:none"></label>
+  <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj osoby i ustawienia (plik)<input type="file" accept=".json,application/json" data-change="pfile" style="display:none"></label>
   ${S.mode === 'demo' ? '' : S.accounts.filter(a => a.anchor && a.anchor.avail || a.limit != null).map(a => `<label class="field" style="margin-top:10px"><span>Limit debetu: ${esc(a.name)} (zł)</span><input inputmode="decimal" value="${a.limit != null ? a.limit : ''}" placeholder="np. 30000" data-change="limit" data-id="${esc(a.id)}"></label>`).join('')}
   ${S.mode === 'demo' ? '' : S.accounts.filter(a => a.anchor).map(a => { const e = effAnchor(a); return e ? `<label class="field" style="margin-top:10px"><span>Saldo bieżące: ${esc(a.name)} (zł, z aplikacji banku)</span><input inputmode="decimal" value="${String(e.v).replace('.', ',')}" data-change="balset" data-id="${esc(a.id)}"></label>` : ''; }).join('')}
   <label class="field" style="margin-top:14px"><span>Klucz Gemini (paragony)</span><input id="gk2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${gkey() ? 'zapisany: ••••' + esc(gkey().slice(-4)) : 'AIza…'}" data-change="gkey"></label>
@@ -759,8 +759,13 @@ document.addEventListener('change', async e => {
   else if (k === 'rbfile' && el.files[0]) restoreBackup(el.files[0]);
   else if (k === 'pfile' && el.files[0]) {
     try {
-      const j = JSON.parse(await el.files[0].text()); if (!j || !Array.isArray(j.people)) throw 0;
-      for (const np of j.people) { if (!np.name) continue; const ex = S.people.find(x => normName(x.name) === normName(np.name)); if (ex) { ex.role = np.role || ex.role; ex.aliases = [...new Set([...(ex.aliases || []), ...(np.aliases || [])])]; } else S.people.push({ id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), name: np.name, role: np.role || 'znajomy', aliases: np.aliases || [] }); }
+      const j = JSON.parse(await el.files[0].text()); if (!j || (!Array.isArray(j.people) && !Array.isArray(j.accounts))) throw 0;
+      for (const ac of j.accounts || []) { // limit i saldo z aplikacji banku; konto rozpoznaję po numerze rachunku albo, gdy jest jedno, biorę je
+        const a = S.accounts.find(x => ac.iban && x.iban === ac.iban) || (S.accounts.length === 1 ? S.accounts[0] : null); if (!a) continue;
+        if (ac.limit != null) { a.limit = +ac.limit; a.limitManual = true; }
+        if (ac.balance != null) { const last = S.raw.filter(t => t.account === a.id && !t.pending).reduce((m, t) => ((t.booked || t.date) > m ? (t.booked || t.date) : m), ''); a.anchor = { date: ac.date || last || TODAY, v: +ac.balance, manual: true }; }
+      }
+      for (const np of j.people || []) { if (!np.name) continue; const ex = S.people.find(x => normName(x.name) === normName(np.name)); if (ex) { ex.role = np.role || ex.role; ex.aliases = [...new Set([...(ex.aliases || []), ...(np.aliases || [])])]; } else S.people.push({ id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4), name: np.name, role: np.role || 'znajomy', aliases: np.aliases || [] }); }
       savePeople(); toast('Osoby wczytane');
     } catch { toast('To nie jest plik z osobami'); }
   }
