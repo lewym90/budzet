@@ -59,9 +59,21 @@ import { analyze as an2 } from '../js/engine.js';
 const mk = (d, a, m, t) => ({ id: d + m + a, date: d, amount: a, currency: 'PLN', merchant: m, title: t, account: 'x', person: 'ja', balance: null });
 const ppl = [{ id: 'p1', name: 'Anna Test', role: 'partnerka', aliases: ['Kotek'] }];
 const rent = ['2026-07-05', '2026-08-05', '2026-09-05'].map((d, i) => mk(d, -2000, i === 1 ? 'Kotek' : 'ANNA TEST', 'Mieszkanie'));
-const phone = ['2026-07-03', '2026-08-20', '2026-09-11'].map(d => mk(d, -100, 'Jan Kowalski', 'Przelew na telefon +48xxxxxx111'));
+const phone = [['2026-07-03', -100], ['2026-08-20', -250], ['2026-09-11', -80]].map(([d, a]) => mk(d, a, 'Jan Kowalski', 'Przelew na telefon +48xxxxxx111'));
 const all = [...rent, ...phone]; applyPeople(all, ppl);
 const rc = an2(all, {}, '2026-09-30');
 console.assert(rc.some(r => r.name.startsWith('Czynsz') && r.count === 3), 'czynsz partnerki powinien być stałą opłatą');
 console.assert(!rc.some(r => /Kowalski/.test(r.name)), 'przelewy BLIK do osób nie są cykliczne');
 console.log('\nOSOBY/CYKLICZNOŚĆ ok:', rc.map(r => r.name + ' ' + r.count).join(', '));
+
+// --- cykliczność miesięczna: weekend, brak płatności, koniec serii ---
+const nf = ds => ds.map(d => mk(d, -55, 'NETFLIX.COM', 'Płatność kartą'));
+const ev = (txs, today) => an2([...txs.map(t => ({ ...t })), mk(today, -10, 'ZABKA', 'Płatność kartą')], {}, today).find(r => /Netflix/.test(r.name)); // inny wpis wyznacza, dokąd sięgają dane
+const base3 = nf(['2026-07-20', '2026-08-20', '2026-09-20']);
+console.assert(ev(base3, '2026-10-10')?.active && !ev(base3, '2026-10-10').late, 'przed terminem: aktywna');
+console.assert(ev(base3, '2026-10-26')?.active && ev(base3, '2026-10-26').late, 'po terminie w trakcie miesiąca: aktywna, ale spóźniona');
+console.assert(ev(base3, '2026-10-31') && !ev(base3, '2026-10-31').active, 'koniec miesiąca bez płatności: wypada');
+console.assert(ev(base3, '2026-11-05') && !ev(base3, '2026-11-05').active, 'miesiąc bez płatności: wypada');
+const gym = ['2026-07-01', '2026-08-03', '2026-08-31'].map(d => mk(d, -170, 'ENDORFINA PLATINIUM', 'Płatność kartą'));
+const gy = an2(gym.concat([mk('2026-09-01', -170, 'ENDORFINA PLATINIUM', 'Płatność kartą')]).slice(0, 4), {}, '2026-09-30');
+console.log('\nCYKLICZNOŚĆ ok');

@@ -178,7 +178,7 @@ function vStale() {
   const subs = act.filter(r => r.kind === 'subskrypcja'), bills = act.filter(r => r.kind === 'stała opłata'), misc = act.filter(r => r.kind === 'płatność cykliczna' || r.kind === 'przelew cykliczny');
   const mSubs = sum(subs.map(r => r.monthly)), mBills = sum(bills.map(r => r.monthly)), mMisc = sum(misc.map(r => r.monthly)), tot = mSubs + mBills + mMisc;
   const marked = act.filter(r => S.cancel[r.key]), saveY = sum(marked.map(r => r.yearly));
-  const row = r => `<button class="row" data-act="rec" data-k="${esc(r.key)}"><div class="ico" style="background:${CAT[r.cat].color}">${letter(r.name)}</div><div class="mid"><div class="t">${esc(r.name)} ${r.priceChange ? `<span class="badge warn">▲ ${money(r.priceChange.to - r.priceChange.from)}</span>` : ''}${S.cancel[r.key] ? '<span class="badge acc">do rezygnacji</span>' : ''}</div><div class="s">${esc(r.periodLabel)} · ${r.active ? 'następna ' + plDate(r.next) : 'ostatnio ' + plDate(r.last)} ${dots(r.persons)}</div></div><div class="amt num">${money(r.monthly)}${r.variable ? '<small>średnio</small>' : r.period !== 'monthly' ? `<small>${money(r.latest)} ${esc(r.periodLabel)}</small>` : ''}</div></button>`;
+  const row = r => `<button class="row" data-act="rec" data-k="${esc(r.key)}"><div class="ico" style="background:${CAT[r.cat].color}">${letter(r.name)}</div><div class="mid"><div class="t">${esc(r.name)} ${r.priceChange ? `<span class="badge warn">▲ ${money(r.priceChange.to - r.priceChange.from)}</span>` : ''}${S.cancel[r.key] ? '<span class="badge acc">do rezygnacji</span>' : ''}</div><div class="s">${esc(r.periodLabel)} · ${r.late ? `<span class="badge warn">nie pobrano jeszcze (było ${plDate(r.next)})</span>` : r.active ? 'następna ' + plDate(r.next) : 'ostatnio ' + plDate(r.last)} ${dots(r.persons)}</div></div><div class="amt num">${money(r.monthly)}${r.variable ? '<small>średnio</small>' : r.period !== 'monthly' ? `<small>${money(r.latest)} ${esc(r.periodLabel)}</small>` : ''}</div></button>`;
   return head('Stałe', 'Subskrypcje i opłaty cykliczne') + `
   <div class="card hero" style="padding-bottom:16px">
     <div class="muted small">Stałe koszty miesięcznie</div>
@@ -192,7 +192,7 @@ function vStale() {
   ${subs.length ? `<div class="h2">Subskrypcje<b class="num">${subs.length}</b></div><div class="card flat">${subs.map(row).join('')}</div>` : ''}
   ${bills.length ? `<div class="h2">Rachunki i stałe opłaty<b class="num">${bills.length}</b></div><div class="card flat">${bills.map(row).join('')}</div>` : ''}
   ${misc.length ? `<div class="h2">Cykliczne, do sprawdzenia<b class="num">${misc.length}</b></div><div class="card flat">${misc.map(row).join('')}</div><div class="small muted" style="margin:-4px 4px 12px">Te płatności wracają regularnie, ale nie wiem, za co. Dotknij, żeby zobaczyć historię.</div>` : ''}
-  ${ended.length ? `<div class="h2">Prawdopodobnie zakończone</div><div class="card flat" style="opacity:.7">${ended.map(row).join('')}</div>` : ''}
+  ${ended.length ? `<div class="h2">Zakończone (brak płatności w całym miesiącu)</div><div class="card flat" style="opacity:.7">${ended.map(row).join('')}</div>` : ''}
   <div class="small muted" style="margin:6px 4px 0">Wykrywam płatności tego samego sprzedawcy, które wracają regularnie. Dotknij pozycji, żeby zobaczyć historię.</div>`;
 }
 

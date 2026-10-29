@@ -219,47 +219,73 @@ const PERIODS = [
   { id: 'quarterly', label: 'co kwartał',   lo: 85,  hi: 97,  tol: 8,  factor: 1 / 3 },
   { id: 'yearly',    label: 'rocznie',      lo: 350, hi: 380, tol: 20, factor: 1 / 12 },
 ];
-const FREE_CATS = new Set(['osoby', 'jedzenie', 'restauracje', 'transport', 'zakupy', 'zdrowie', 'rozrywka']);
+const FREE_CATS = new Set(['jedzenie', 'restauracje', 'transport', 'zakupy', 'zdrowie', 'rozrywka']);
 
-// stałe opłaty i subskrypcje: ten sam sprzedawca, regularny odstęp, podobna kwota
-function detectGroup(arr, key, name, today) {
+const dimOf = mk => new Date(+mk.slice(0, 4), +mk.slice(5, 7), 0).getDate();
+const monthDate = (mk, dom) => `${mk}-${String(Math.min(dom, dimOf(mk))).padStart(2, '0')}`;
+// bank księguje w dniu roboczym: sobota i niedziela przechodzą na poniedziałek
+const nextBizDay = d => { const w = new Date(d + 'T12:00:00Z').getUTCDay(); return w === 6 ? dstr(dnum(d) + 2) : w === 0 ? dstr(dnum(d) + 1) : d; };
+
+/* Płatność cykliczna (miesięczna): ta sama kwota u tego samego sprzedawcy, odbiorcy lub numeru, w co najmniej 3 kolejnych miesiącach
+   (subskrypcje z listy: 2). Liczy się miesiąc, nie dzień, więc przesunięcia o weekend i różne dni miesiąca nie przeszkadzają.
+   Brak płatności w całym miesiącu kończy serię. Bieżący miesiąc, w którym płatność jeszcze nie wypadła, niczego nie kończy.
+   Kwartalne i roczne wykrywam po odstępach. */
+function detectGroup(arr, key, name, today, ref) {
   arr.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
   const last = arr[arr.length - 1], rule = last.rule;
-  const isSub = !!(rule && rule.sub), isFixed = !!(rule && rule.fixed);
-  if (!isSub && !isFixed && FREE_CATS.has(last.cat)) return null;
+  const isSub = !!(rule && rule.sub), isFixed = !!(rule && rule.fixed), isPerson = !!(rule && rule.person);
+  if (!isSub && !isFixed && !isPerson && FREE_CATS.has(last.cat)) return null;
   if (arr.length < (isSub ? 2 : 3)) return null;
-  const days = arr.map(t => dnum(t.date));
-  const gaps = days.slice(1).map((d, i) => d - days[i]).filter(g => g > 0);
-  if (!gaps.length) return null;
-  const g = median(gaps);
-  const P = PERIODS.find(p => g >= p.lo && g <= p.hi);
-  if (!P) return null;
-  if (gaps.filter(x => Math.abs(x - g) <= P.tol + 1).length / gaps.length < 0.7) return null;
-  if (P.id === 'monthly' && new Set(arr.map(t => t.date.slice(0, 7))).size < 3) return null; // co najmniej 3 różne miesiące
+  const months = [...new Set(arr.map(t => t.date.slice(0, 7)))].sort();
+  let run = 1; for (let i = months.length - 1; i > 0; i--) { if (addMonths(months[i - 1], 1) === months[i]) run++; else break; }
+  const perMonth = arr.length / months.length;
+  let P = null, status = 'active', late = false, next;
   const amts = arr.map(t => -t.amountPLN), n = amts.length;
+  if (run >= (isSub ? 2 : 3) && perMonth <= 1.25) {
+    P = PERIODS.find(p => p.id === 'monthly');
+    const doms = arr.map(t => +t.date.slice(8, 10)).sort((a, b) => a - b), dom = doms[Math.floor(doms.length / 2)];
+    const spread = Math.max(...doms.map(d => Math.abs(d - dom)));
+    const refM = ref.slice(0, 7), lastM = months[months.length - 1], expect = m => nextBizDay(monthDate(m, dom));
+    if (lastM === refM) next = expect(addMonths(refM, 1));
+    else if (lastM === addMonths(refM, -1)) {
+      const e = expect(refM), grace = Math.max(4, spread + 2), monthEnd = +ref.slice(8, 10) >= dimOf(refM) - 1;
+      next = e;
+      if (dnum(ref) <= dnum(e) + grace) status = 'active';
+      else if (!monthEnd) { status = 'active'; late = true; } // termin minął, ale miesiąc trwa: czekam do jego końca
+      else status = 'ended';
+    } else { status = 'ended'; next = expect(addMonths(lastM, 1)); }
+  } else {
+    const days = arr.map(t => dnum(t.date));
+    const gaps = days.slice(1).map((d, i) => d - days[i]).filter(g => g > 0);
+    if (!gaps.length) return null;
+    const g = median(gaps);
+    P = PERIODS.find(p => (p.id === 'quarterly' || p.id === 'yearly') && g >= p.lo && g <= p.hi);
+    if (!P) return null;
+    if (gaps.filter(x => Math.abs(x - g) <= P.tol + 1).length / gaps.length < 0.7) return null;
+    next = dstr(days[days.length - 1] + Math.round(g));
+    status = dnum(ref) - dnum(next) <= Math.max(10, 0.35 * g) ? 'active' : 'ended';
+  }
   let priceChange = null;
   if (n >= 4) {
     const early = amts.slice(0, n - 2), em = median(early);
     const es = Math.max(...early.map(a => Math.abs(a - em) / em));
-    const late = amts.slice(n - 2);
-    if (es <= 0.05 && Math.abs(late[0] - late[1]) / late[1] <= 0.03 && Math.abs(late[1] - em) / em > 0.06 && Math.abs(late[1] - em) >= 1)
-      priceChange = { from: em, to: late[1] };
+    const lt = amts.slice(n - 2);
+    if (es <= 0.05 && Math.abs(lt[0] - lt[1]) / lt[1] <= 0.03 && Math.abs(lt[1] - em) / em > 0.06 && Math.abs(lt[1] - em) >= 1)
+      priceChange = { from: em, to: lt[1] };
   }
   const med = median(amts);
-  const spread = Math.max(...amts.map(a => Math.abs(a - med) / med));
-  if (spread > 0.5 && !priceChange) return null;
-  const variable = !priceChange && spread > 0.08;
+  const spreadA = Math.max(...amts.map(a => Math.abs(a - med) / med));
+  if (spreadA > (isPerson ? 0.05 : 0.5) && !priceChange) return null;
+  const variable = !priceChange && spreadA > 0.08;
   const latest = priceChange ? priceChange.to : variable ? sum(amts.slice(-3)) / Math.min(3, n) : amts[n - 1];
-  const next = dstr(days[days.length - 1] + Math.round(g));
-  const overdue = dnum(today) - dnum(next);
   const card = /PLATNOSC KART|BLIK/.test(strip(last.title).toUpperCase());
   return {
     arr, item: {
       key, name, cat: isSub ? 'subskrypcje' : last.cat, tag: last.tag,
-      kind: isSub ? 'subskrypcja' : isFixed ? 'stała opłata' : card ? 'płatność cykliczna' : 'przelew cykliczny',
+      kind: isSub ? 'subskrypcja' : isFixed ? 'stała opłata' : isPerson ? 'przelew cykliczny' : card ? 'płatność cykliczna' : 'przelew cykliczny',
       period: P.id, periodLabel: P.label,
       latest, monthly: latest * P.factor, yearly: latest * P.factor * 12,
-      count: n, first: arr[0].date, last: last.date, next, active: overdue <= Math.max(10, 0.35 * g), variable, priceChange,
+      count: n, months: run, first: arr[0].date, last: last.date, next, active: status === 'active', late, variable, priceChange,
       persons: [...new Set(arr.map(t => t.person))], accounts: [...new Set(arr.map(t => t.account))],
     },
   };
@@ -277,6 +303,7 @@ function clusterByAmount(arr) {
 
 export function detectRecurring(txs, today) {
   const groups = new Map();
+  const ref = txs.reduce((m, t) => (t.date <= today && t.date > m ? t.date : m), '0000-00-00'); // dane mogą kończyć się przed „dziś”
   for (const t of txs) {
     if (t.internal || t.amountPLN >= 0) continue;
     const gk = `${t.mkey}|${t.account}`; // ten sam sprzedawca na różnych kontach to osobne opłaty
@@ -286,13 +313,13 @@ export function detectRecurring(txs, today) {
   const out = [];
   for (const [gk, arr] of groups) {
     const rule = arr[0].rule, base = arr[arr.length - 1].name;
-    let found = (rule && rule.multi) ? null : detectGroup(arr, gk, base, today);
+    let found = (rule && (rule.multi || rule.person)) ? null : detectGroup(arr, gk, base, today, ref);
     if (found) { for (const t of found.arr) t.recKey = gk; out.push(found.item); continue; }
-    if (new Set(arr.map(t => Math.round(t.amountPLN))).size < 2 && !(rule && rule.multi)) continue;
+    if (new Set(arr.map(t => Math.round(t.amountPLN))).size < 2 && !(rule && (rule.multi || rule.person))) continue;
     for (const c of clusterByAmount(arr)) {
       if (c.length < 2) continue;
       const m = median(c.map(t => -t.amountPLN)), k = `${gk}|${Math.round(m)}`;
-      const f = detectGroup(c, k, `${base} ${money(m, 2)}`, today);
+      const f = detectGroup(c, k, `${base} ${money(m, 2)}`, today, ref);
       if (f) { for (const t of f.arr) t.recKey = k; out.push(f.item); }
     }
   }
@@ -457,7 +484,8 @@ function markIrregularIncome(txs) {
   if (months.size < 3) return;
   const g = new Map();
   for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr) { const a = g.get(t.mkey) || new Set(); a.add(t.date.slice(0, 7)); g.set(t.mkey, a); }
-  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr && g.get(t.mkey).size < 3) { t.irr = true; t.cat = 'nieregularny'; }
+  const run = set => { const ms = [...set].sort(); let best = 1, cur = 1; for (let i = 1; i < ms.length; i++) { cur = addMonths(ms[i - 1], 1) === ms[i] ? cur + 1 : 1; best = Math.max(best, cur); } return ms.length ? best : 0; };
+  for (const t of txs) if (t.amountPLN > 0 && !t.internal && !t.offset && !t.irr && run(g.get(t.mkey)) < 3) { t.irr = true; t.cat = 'nieregularny'; } // regularny wpływ: co najmniej 3 kolejne miesiące
 }
 export function analyze(txs, overrides, today, owners) {
   if (owners) setOwners(owners);
