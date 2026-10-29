@@ -10,6 +10,7 @@ export const CATS = [
   { id: 'zakupy',      name: 'Zakupy i dom',            color: '#008300', variable: true },
   { id: 'zdrowie',     name: 'Zdrowie i uroda',         color: '#9085e9', variable: true },
   { id: 'rozrywka',    name: 'Rozrywka i podróże',      color: '#e66767', variable: true },
+  { id: 'gotowka',     name: 'Gotówka',                 color: '#b8a06a', variable: true },
   { id: 'inne',        name: 'Inne',                    color: '#7d8aa3', variable: true },
   { id: 'dochod',      name: 'Wpływy',                  color: '#2ee6a6', variable: false },
   { id: 'przelew',     name: 'Przelew własny',          color: '#7d8aa3', variable: false },
@@ -23,6 +24,19 @@ export const RATES = { PLN: 1, EUR: 4.27, USD: 3.95, GBP: 4.95, CZK: 0.17, CHF: 
 // [wzorzec, nazwa, kategoria, grupa, subskrypcja?, stały rachunek?, opcje]
 // opcje: own = przelew własny, irr = wpływ nieregularny, offset = wypłata pomniejsza wydatki kategorii, multi = kilka różnych kwot
 const RULES = [
+  [/WYPLATA GOTOWKI|WYPLATA Z BANKOMATU|CASH WITHDRAWAL|\bATM\b/, 'Wypłata z bankomatu', 'gotowka'],
+  [/PROWIZJA ZA WYPLAT|OPLATA ZA WYPLAT|OPL\.? ?ZA WYPLAT/, 'Prowizje bankowe', 'inne', 'Bank'],
+  [/PROW\.? ?I OPL|ZWIEKSZENIE LIM/, 'Opłaty za limit w koncie', 'inne', 'Dług'],
+  [/URZAD SKARBOWY|PIT-?\d|\bZUS\b/, 'Podatki i urzędy', 'inne'],
+  [/GMINA|ODPAD/, 'Odpady i opłaty gminne', 'mieszkanie', null, 0, 1],
+  [/KAUCJA/, 'Kaucja', 'inne'],
+  [/FOODSI|CUKIERN|KARMELLO|\bALDI\b|TOM MARKET|INTERMARCHE|SPOMLEK|DELIKATESY|PIEKARN|LODZIARN|SKLEP ABC|MAKRO|CARREFOUR/, 'Sklep spożywczy', 'jedzenie'],
+  [/KARCZMA|BISTRO|CAFE\b|KAWIARN/, 'Restauracja i bar', 'restauracje'],
+  [/\bCLUB\b|\bZOO\b|RAGNAROK|MUNDO|DYSKOTEK|BOWLING/, 'Rozrywka', 'rozrywka'],
+  [/PANDORA|\bCHIC\b|CROPP|\bLPP\b|CALZEDONIA|KIK TEXTIL|RITUALS|DEALZ|VINTED|MEDIAPRESS|KWIACIARNIA|GO SHOPPING|ALIEXPRESS/, 'Zakupy i moda', 'zakupy'],
+  [/WETERYN|ALAB|DIAGNOSTYK/, 'Zdrowie i weterynarz', 'zdrowie'],
+  [/AUTO[- ]?(MIX|PERFEKT)|MYJNIA|WULKANIZ|WARSZTAT/, 'Auto', 'transport'],
+  [/KREA\.?AI/, 'Krea', 'subskrypcje', 'AI', 1],
   [/PROWIZJA ZA PRZEWALUTOWANIE/, 'Prowizje za przewalutowanie', 'inne', 'Bank'],
   [/ODS - KRED|OBSL\.? ?LIMITU|LIMITU ZADL/, 'Koszt zadłużenia w koncie', 'inne', 'Dług'],
   [/LIMIT W KONCIE/, 'Limit w koncie', 'inne', null, 0, 0, { own: 1 }],
@@ -51,7 +65,7 @@ const RULES = [
   [/FACELESSREEL/, 'FacelessReel', 'subskrypcje', 'AI', 1],
   [/CANVA/, 'Canva', 'subskrypcje', 'Projektowanie', 1],
   [/DROPBOX/, 'Dropbox', 'subskrypcje', 'Chmura', 1],
-  [/ZDROFIT|BENEFIT|FITNESS|CALYPSO|CITYFIT|MYFITNESS|SILOWNIA|MAGIC ?GYM|ENDORFINA/, 'Siłownia', 'subskrypcje', 'Fitness', 1],
+  [/ZDROFIT|BENEFIT|FITNESS|CALYPSO|CITYFIT|MYFITNESS|SILOWNIA|MAGIC ?GYM/, 'Siłownia', 'subskrypcje', 'Fitness', 1],
   [/BIEDRONKA/, 'Biedronka', 'jedzenie'],
   [/LIDL/, 'Lidl', 'jedzenie'],
   [/ZABKA/, 'Żabka', 'jedzenie'],
@@ -193,7 +207,7 @@ function detectGroup(arr, key, name, today) {
     const early = amts.slice(0, n - 2), em = median(early);
     const es = Math.max(...early.map(a => Math.abs(a - em) / em));
     const late = amts.slice(n - 2);
-    if (es <= 0.05 && Math.abs(late[0] - late[1]) / late[1] <= 0.03 && Math.abs(late[1] - em) / em > 0.06)
+    if (es <= 0.05 && Math.abs(late[0] - late[1]) / late[1] <= 0.03 && Math.abs(late[1] - em) / em > 0.06 && Math.abs(late[1] - em) >= 1)
       priceChange = { from: em, to: late[1] };
   }
   const med = median(amts);

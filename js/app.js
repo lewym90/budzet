@@ -1,5 +1,6 @@
 import { fmtInt, CATS, CAT, analyze, budgetState, insights, suggestPlan, monthTotals, monthKey, addMonths, dnum, plDate, money } from './engine.js';
 import { demoData, DEMO_ACCOUNTS } from './demo.js';
+import { scanReceipt, splitByCategory } from './receipt.js';
 import { decodeBuffer, importFiles, findDuplicates, FIELDS } from './parsers.js';
 
 /* ---------- pomocnicze ---------- */
@@ -28,13 +29,14 @@ const I = {
   cam: '<path d="M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/>',
   pen: '<path d="M4 20l4-1 11-11-3-3L5 16l-1 4zM14 6l3 3"/>',
   chev: '<path d="M9 6l6 6-6 6"/>',
+  gotowka: '<path d="M3 7a2 2 0 0 1 2-2h13v4M3 7v11a2 2 0 0 0 2 2h14a1 1 0 0 0 1-1v-9a1 1 0 0 0-1-1H5a2 2 0 0 1-2-2zM16 14.5h.01"/>',
 };
 const svg = (p, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 
 /* ---------- stan ---------- */
 const KEY = 'budzet.v1';
-const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {} });
-let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) return j; } catch { } return fresh(); })();
+const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {} });
+let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; return j; } } catch { } return fresh(); })();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { } };
 const accounts = () => (S.mode === 'demo' ? DEMO_ACCOUNTS : S.accounts);
 const accName = id => (accounts().find(a => a.id === id) || { name: id }).name;
@@ -224,8 +226,8 @@ function vPlan() {
   </div>`;
 }
 
-const VIEWS = { dzis: vDzis, wydatki: vWydatki, stale: vStale, plan: vPlan };
-const TABS = [['dzis', 'Dziś'], ['wydatki', 'Wydatki'], ['add', ''], ['stale', 'Stałe'], ['plan', 'Plan']];
+const VIEWS = { dzis: vDzis, wydatki: vWydatki, gotowka: vGotowka, stale: vStale, plan: vPlan };
+const TABS = [['dzis', 'Dziś'], ['wydatki', 'Wydatki'], ['gotowka', 'Gotówka'], ['add', ''], ['stale', 'Stałe'], ['plan', 'Plan']];
 
 function renderTabs() {
   $('#tabs').innerHTML = '<div class="in">' + TABS.map(([id, l]) => id === 'add'
@@ -242,6 +244,130 @@ function render(first = false) {
   renderTabs();
 }
 
+/* ---------- gotówka (portfel) ----------
+   Wypłata z bankomatu jest wydatkiem w budżecie (tak jak w banku). Wpisy „z portfela” rozbijają tę gotówkę
+   na kategorie, ale nie wchodzą drugi raz do sum budżetu. */
+function cashState() {
+  if (!S.cash) S.cash = {};
+  if (!S.cash.since) { S.cash.since = TODAY; S.cash.adj = 0; save(); }
+  const since = S.cash.since, adj = S.cash.adj || 0;
+  const wd = TX.filter(t => t.cat === 'gotowka' && t.amountPLN < 0 && !t.internal);
+  const log = S.cashLog || [];
+  const wIn = sum(wd.filter(t => t.date >= since).map(t => -t.amountPLN)), lIn = sum(log.filter(l => l.date >= since).map(l => l.amount));
+  return { since, wd, log, balance: adj + wIn - lIn };
+}
+function vGotowka() {
+  const C = cashState(), mk = U.mk;
+  const wdM = C.wd.filter(t => monthKey(t.date) === mk).sort((a, b) => (a.date < b.date ? 1 : -1)), logM = C.log.filter(l => monthKey(l.date) === mk).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const wSum = sum(wdM.map(t => -t.amountPLN)), lSum = sum(logM.map(l => l.amount)), gap = wSum - lSum;
+  const byCat = {}; for (const l of logM) byCat[l.cat] = (byCat[l.cat] || 0) + l.amount;
+  const cats = CATS.filter(c => byCat[c.id] > 0).sort((a, c) => byCat[c.id] - byCat[a.id]);
+  const none = !C.wd.length && !C.log.length;
+  const ms = monthsWithData().slice(-6);
+  return head('Gotówka', mName(mk)) + `
+  <div class="card hero" style="padding-bottom:16px">
+    <div class="muted small">W portfelu (szacunek)</div>
+    <div class="num" style="font-size:44px;font-weight:800;margin:4px 0 2px;letter-spacing:-.04em"><span data-count="${Math.round(C.balance)}">0</span><small style="font-size:20px;color:var(--tx2);margin-left:4px">zł</small></div>
+    <div class="muted small">Liczone od ${plDate(C.since)} ${C.since.slice(0, 4)}: wypłaty minus wpisy z portfela</div>
+    ${S.cash.adj ? '' : '<div class="small" style="margin-top:8px;color:var(--pa)">Dotknij „Policzyłem”, żeby ustawić, ile gotówki masz teraz.</div>'}
+    <div style="display:flex;gap:10px;margin-top:14px"><button class="btn" style="flex:1" data-act="cashadd">Wydałem z portfela</button><button class="btn ghost" style="flex:1" data-act="cashcal">Policzyłem</button></div>
+  </div>
+  ${ms.length > 1 ? `<div class="chips">${ms.map(m => `<button class="chip ${m === mk ? 'on' : ''}" data-act="month" data-m="${m}">${MSHORT[+m.slice(5, 7) - 1]}</button>`).join('')}</div>` : ''}
+  ${none ? empty('Brak wypłat', 'Wypłaty z bankomatu pojawią się tu same po zaimportowaniu wyciągu. Wydatki gotówką dopisujesz przyciskiem powyżej.') : `
+  <div class="card">
+    <div class="kv"><span class="muted">Wypłacono w miesiącu</span><b class="num">${money(wSum)}</b></div>
+    <div class="kv"><span class="muted">Opisane wydatki</span><b class="num">${money(lSum)}</b></div>
+    <div class="kv"><span class="muted">Bez opisu</span><b class="num ${gap > 0.5 * wSum && wSum ? 'neg' : ''}">${money(Math.max(0, gap))}</b></div>
+    ${wSum ? `<div class="split" style="margin-top:12px"><i style="background:var(--acc);flex-grow:0" data-fg="${Math.min(lSum, wSum).toFixed(0)}"></i><i style="background:var(--s3);flex-grow:0" data-fg="${Math.max(0, gap).toFixed(0)}"></i></div>` : ''}
+    <div class="small muted" style="margin-top:8px">Wypłata liczy się do budżetu w dniu pobrania z bankomatu. Wpisy z portfela tylko pokazują, na co poszła gotówka.</div>
+  </div>
+  ${cats.length ? `<div class="h2">Na co poszła gotówka</div><div class="card flat">${cats.map(c => `<div class="row"><div class="ico" style="background:${c.color}">${letter(c.name)}</div><div class="mid"><div class="t">${esc(c.name)}</div></div><div class="amt">${money(byCat[c.id])}</div></div>`).join('')}</div>` : ''}
+  ${logM.length ? `<div class="h2">Wydatki z portfela<b class="num">${logM.length}</b></div><div class="card flat">${logM.map(l => `<button class="row" data-act="cashrow" data-id="${esc(l.id)}"><div class="ico" style="background:${CAT[l.cat] ? CAT[l.cat].color : 'var(--s3)'}">${letter(l.name)}</div><div class="mid"><div class="t">${esc(l.name)}</div><div class="s">${plDate(l.date)} · ${esc(CAT[l.cat] ? CAT[l.cat].name : '')}</div></div><div class="amt">−${money(l.amount)}</div></button>`).join('')}</div>` : ''}
+  ${wdM.length ? `<div class="h2">Wypłaty z bankomatu<b class="num">${wdM.length}</b></div><div class="card flat">${wdM.map(t => `<div class="row"><div class="ico" style="background:${CAT.gotowka.color}">${svg(I.gotowka)}</div><div class="mid"><div class="t">${esc(t.merchant || 'Bankomat')}</div><div class="s">${plDate(t.date)}</div></div><div class="amt">${money(-t.amountPLN)}</div></div>`).join('')}</div>` : ''}`}`;
+}
+function sCashAdd() {
+  openSheet(`<h3>Wydałem z portfela</h3><div class="muted small">Gotówka z wcześniejszej wypłaty. Nie dolicza się drugi raz do budżetu.</div>
+  <label class="field"><span>Kwota (zł)</span><input id="cAmt" inputmode="decimal" placeholder="0,00" autocomplete="off"></label>
+  <label class="field"><span>Na co</span><input id="cName" placeholder="np. Targ, parking" autocomplete="off"></label>
+  <label class="field"><span>Kategoria</span><select id="cCat">${CATS.filter(c => c.variable && c.id !== 'gotowka').map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
+  <label class="field"><span>Data</span><input id="cDate" type="date" value="${TODAY}"></label>
+  <button class="btn" style="margin-top:18px" data-act="cashsave">Zapisz</button>`);
+}
+function sCashCal() {
+  const C = cashState();
+  openSheet(`<h3>Ile masz w portfelu?</h3><div class="muted small">Wpisz, ile gotówki naprawdę masz. Od teraz liczę od tej kwoty.</div>
+  <label class="field"><span>Stan (zł)</span><input id="cBal" inputmode="decimal" value="${Math.max(0, Math.round(C.balance))}" autocomplete="off"></label>
+  <button class="btn" style="margin-top:18px" data-act="cashcalsave">Zapisz</button>`);
+}
+
+/* ---------- paragon ---------- */
+const GKEY = 'budzet.gkey';
+const gkey = () => { try { return localStorage.getItem(GKEY) || ''; } catch { return ''; } };
+let RC = null;
+function sReceipt() {
+  if (!gkey()) {
+    openSheet(`<h3>Klucz Gemini</h3><div class="muted small">Do odczytu paragonów potrzebny jest darmowy klucz. Wejdź na aistudio.google.com/apikey, utwórz klucz dla tego projektu i wklej go tutaj. Zostaje tylko w tym telefonie, nie trafia do kopii danych.</div>
+    <label class="field"><span>Klucz</span><input id="gk" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AIza…"></label>
+    <button class="btn" style="margin-top:18px" data-act="gksave">Zapisz i dalej</button>`); return;
+  }
+  openSheet(`<h3>Paragon</h3><div class="muted small">Zdjęcie idzie do Google tylko po to, żeby odczytać tekst. Sumy sprawdzam sam i nic nie zapisuję bez Twojego zatwierdzenia.</div>
+  <label class="btn" style="margin-top:18px;cursor:pointer">Zrób zdjęcie lub wybierz<input type="file" accept="image/*" data-change="rcfile" style="display:none"></label>`);
+}
+function renderReceipt() {
+  const r = RC; if (!r) return;
+  const cats = CATS.filter(c => c.variable && c.id !== 'gotowka');
+  const top = splitByCategory(r.items, r.total)[0].cat;
+  openSheet(`<h3>Sprawdź paragon</h3>
+  <div class="card flat" style="margin-top:10px">${r.items.map(i => `<div class="kv"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(i.name)}</span><b class="num">${money(i.amount, 2)}</b></div>`).join('') || '<div class="small muted">Nie odczytałem pozycji, zapiszę samą sumę.</div>'}</div>
+  <div class="small ${r.matches || !r.items.length ? 'muted' : ''}" style="margin-top:8px;${r.matches || !r.items.length ? '' : 'color:var(--pa)'}">${r.items.length ? (r.matches ? 'Suma pozycji zgadza się z kwotą na paragonie ✓' : `Suma pozycji ${money(r.itemsSum, 2)} nie zgadza się z kwotą ${money(r.total, 2)}. Popraw kwotę, jeśli jest zła.`) : ''}</div>
+  <label class="field"><span>Sklep</span><input id="rMer" value="${esc(r.merchant)}" autocomplete="off"></label>
+  <label class="field"><span>Kwota do zapłaty (zł)</span><input id="rTot" inputmode="decimal" value="${String(r.total).replace('.', ',')}" autocomplete="off"></label>
+  <label class="field"><span>Data</span><input id="rDate" type="date" value="${r.date || TODAY}"></label>
+  <label class="field"><span>Kategoria</span><select id="rCat">${cats.map(c => `<option value="${c.id}" ${c.id === top ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
+  <label class="field"><span>Zapłacone</span><select id="rSrc"><option value="konto">Kartą lub BLIK-iem (konto)</option><option value="portfel">Gotówką z portfela</option></select></label>
+  ${new Set(r.items.map(i => i.category)).size > 1 ? `<label class="field"><span>Podział</span><select id="rSplit"><option value="0">Jedna kategoria</option><option value="1">Wg pozycji</option></select></label>` : ''}
+  <div class="small muted" style="margin-top:8px">Jeśli płatność już jest na wyciągu, dopasuję paragon do niej i nie policzę wydatku drugi raz.</div>
+  <button class="btn" style="margin-top:18px" data-act="rcsave">Zapisz</button>`);
+}
+function saveReceipt() {
+  const total = parseFloat(String($('#rTot').value).replace(',', '.')), name = $('#rMer').value.trim() || 'Paragon', date = $('#rDate').value || TODAY, cat = $('#rCat').value, src = $('#rSrc').value;
+  if (!(total > 0)) { toast('Podaj kwotę'); return; }
+  const parts = $('#rSplit') && $('#rSplit').value === '1' ? splitByCategory(RC.items, total) : [{ cat, amount: total }];
+  if (src === 'portfel') {
+    for (const p of parts) S.cashLog.push({ id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), date, amount: p.amount, name, cat: p.cat });
+    save(); closeSheet(); VIEW = 'gotowka'; location.hash = '#gotowka'; render(true); toast('Zapisano w portfelu'); return;
+  }
+  const m = S.mode !== 'demo' && TX.find(t => !t.pending && t.amountPLN < 0 && Math.abs(-t.amountPLN - total) < 0.02 && Math.abs(dnum(t.date) - dnum(date)) <= 4 && !S.receipts[t.id]);
+  if (m) {
+    S.receipts[m.id] = { merchant: name, date, items: RC.items };
+    if (parts.length === 1 && m.cat !== parts[0].cat) S.overrides[m.mkey] = parts[0].cat;
+    save(); rebuild(); closeSheet(); render(); toast('Dopasowano do płatności z konta'); return;
+  }
+  if (S.mode === 'demo') { S.mode = 'real'; S.raw = []; S.accounts = []; S.overrides = {}; S.plan = {}; S.cancel = {}; }
+  if (!S.accounts.some(a => a.id === 'reczne')) S.accounts.push({ id: 'reczne', name: 'Gotówka i ręczne', person: 'ja' });
+  for (const p of parts) {
+    S.raw.push({ id: 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), date, amount: -p.amount, currency: 'PLN', merchant: name, title: parts.length > 1 ? CAT[p.cat].name : '', account: 'reczne', person: 'ja', balance: null });
+    if (parts.length > 1) S.overrides[(name + ' ' + CAT[p.cat].name).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z ]+/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 3).join(' ')] = p.cat;
+  }
+  save(); rebuild(); closeSheet(); render(); toast('Zapisano wydatek');
+}
+
+/* ---------- kopia i eksport ---------- */
+function exportCSV() {
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const rows = [['Data', 'Konto', 'Osoba', 'Kwota', 'Waluta', 'Sprzedawca', 'Tytuł', 'Kategoria', 'Przelew własny']].concat(TX.slice().sort((a, b) => (a.date < b.date ? -1 : 1)).map(t => [t.date, accName(t.account), PN[t.person] || t.person, String(t.amount).replace('.', ','), t.currency, t.merchant, t.title, (CAT[t.cat] || {}).name || '', t.internal ? 'tak' : '']));
+  const b = new Blob(['﻿' + rows.map(r => r.map(q).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' }), a = document.createElement('a');
+  a.href = URL.createObjectURL(b); a.download = `budzet-transakcje-${TODAY}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+let restoreArm = null;
+async function restoreBackup(file) {
+  try {
+    const j = JSON.parse(await file.text());
+    if (!j || j.v !== 1 || !Array.isArray(j.raw) || !Array.isArray(j.accounts)) throw 0;
+    restoreArm = j; $('#rbmsg').textContent = `Kopia: ${j.raw.length} transakcji, ${j.accounts.length} kont. Dotknij „Przywróć”, żeby zastąpić obecne dane.`; $('#rbgo').hidden = false;
+  } catch { toast('To nie jest kopia z Budżetu'); }
+}
+
 /* ---------- arkusze ---------- */
 const sheet = $('#sheet'), pane = sheet.querySelector('.pane');
 function openSheet(html) { pane.innerHTML = `<div class="grab"></div>${html}`; sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false'); pane.scrollTop = 0; document.documentElement.classList.add('lock'); }
@@ -254,8 +380,8 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 function sAdd() {
   openSheet(`<h3>Dodaj</h3><div class="muted small">Dane zostają w tym telefonie.</div>
   <button class="opt" data-act="import"><span class="g">${svg(I.file)}</span><span><b>Wyciąg z banku (CSV lub MT940)</b><span>Wiele plików naraz, np. cały rok</span></span></button>
-  <button class="opt" disabled><span class="g">${svg(I.cam)}</span><span><b>Paragon ze zdjęcia</b><span>Skanowanie w następnym etapie</span></span></button>
-  <button class="opt" data-act="manual"><span class="g">${svg(I.pen)}</span><span><b>Wydatek ręcznie</b><span>Gotówka i drobne zakupy</span></span></button>`);
+  <button class="opt" data-act="receipt"><span class="g">${svg(I.cam)}</span><span><b>Paragon ze zdjęcia</b><span>Odczyt przez Gemini, Ty zatwierdzasz</span></span></button>
+  <button class="opt" data-act="manual"><span class="g">${svg(I.pen)}</span><span><b>Wydatek ręcznie</b><span>Gotówka z portfela albo drobne zakupy</span></span></button>`);
 }
 
 /* import */
@@ -348,12 +474,14 @@ function sManual() {
   <label class="field"><span>Kategoria</span><select id="mCat">${CATS.filter(c => c.variable).map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>
   <label class="field"><span>Kto</span><select id="mWho"><option value="ja">Ja</option><option value="partnerka">Partnerka</option></select></label>
   <label class="field"><span>Data</span><input id="mDate" type="date" value="${TODAY}"></label>
+  <label class="field"><span>Skąd</span><select id="mSrc"><option value="konto">Z konta (karta, BLIK)</option><option value="portfel">Z portfela (gotówka z bankomatu)</option></select></label>
   ${S.mode === 'demo' ? '<div class="small" style="margin-top:10px;color:var(--pa)">Dane demo zostaną zastąpione Twoimi.</div>' : ''}
   <button class="btn" style="margin-top:18px" data-act="msave">Zapisz</button>`);
 }
 function saveManual() {
   const amt = parseFloat(String($('#mAmt').value).replace(',', '.')), name = $('#mName').value.trim();
   if (!(amt > 0) || !name) { toast('Podaj kwotę i nazwę'); return; }
+  if ($('#mSrc').value === 'portfel') { S.cashLog.push({ id: 'c' + Date.now().toString(36), date: $('#mDate').value || TODAY, amount: amt, name, cat: $('#mCat').value }); save(); closeSheet(); VIEW = 'gotowka'; location.hash = '#gotowka'; render(true); toast('Zapisano w portfelu'); return; }
   if (S.mode === 'demo') { S.mode = 'real'; S.raw = []; S.accounts = []; S.overrides = {}; S.plan = {}; S.cancel = {}; }
   if (!S.accounts.some(a => a.id === 'reczne')) S.accounts.push({ id: 'reczne', name: 'Gotówka i ręczne', person: 'ja' });
   const cat = $('#mCat').value, id = 'm' + Date.now().toString(36);
@@ -370,6 +498,7 @@ function sTx(id) {
   <div class="num" style="font:800 34px var(--f-num);margin:10px 0 2px;letter-spacing:-.03em">${t.amountPLN > 0 ? '+' : '−'}${money(t.amountPLN, 2)}</div>
   ${t.currency !== 'PLN' ? `<div class="small muted">${t.amount.toFixed(2)} ${esc(t.currency)}, kurs przybliżony</div>` : ''}
   <div class="small muted" style="margin-top:8px">${esc(t.merchant)}${t.title ? ' · ' + esc(t.title) : ''}</div>
+  ${S.receipts && S.receipts[t.id] ? `<div class="h2" style="margin-top:16px">Paragon</div><div class="card flat">${S.receipts[t.id].items.map(i => `<div class="kv"><span>${esc(i.name)}</span><b class="num">${money(i.amount, 2)}</b></div>`).join('')}</div>` : ''}
   ${t.internal ? '<div class="small" style="margin-top:8px;color:var(--pa)">Przelew własny: nie liczę go jako wydatku ani wpływu.</div>' : ''}
   <div class="h2" style="margin-top:20px">Kategoria <b>zapamiętam dla „${esc(t.name)}”</b></div><div class="chips" style="flex-wrap:wrap">${CATS.filter(c => t.amountPLN < 0 ? !['dochod', 'nieregularny'].includes(c.id) : ['dochod', 'nieregularny', 'przelew'].includes(c.id)).map(c => `<button class="chip ${t.cat === c.id ? 'on' : ''}" data-act="setcat" data-id="${esc(t.id)}" data-c="${c.id}"><i class="dot" style="background:${c.color}"></i>${esc(c.name)}</button>`).join('')}</div>`);
 }
@@ -392,6 +521,10 @@ function sSettings() {
   ${accounts().map(a => `<div class="kv"><span>${esc(a.name)}</span><span>${dots([a.person])} ${esc(PN[a.person])}</span></div>`).join('')}</div>
   <div class="row" style="margin-top:8px"><div class="mid"><div class="t">Miesięczne oszczędności</div><div class="s">odejmuję od planu na życie</div></div><span class="step"><button data-act="sav" data-d="-100" aria-label="Mniej">−</button><span class="n">${money(S.savings)}</span><button data-act="sav" data-d="100" aria-label="Więcej">+</button></span></div>
   <button class="btn ghost" style="margin-top:14px" data-act="export" ${S.mode === 'demo' ? 'disabled' : ''}>Pobierz kopię danych (JSON)</button>
+  <button class="btn ghost" style="margin-top:10px" data-act="exportcsv" ${S.mode === 'demo' ? 'disabled' : ''}>Pobierz transakcje (CSV do Excela)</button>
+  <label class="btn ghost" style="margin-top:10px;cursor:pointer;display:block;text-align:center">Wczytaj kopię danych<input type="file" accept=".json,application/json" data-change="rbfile" style="display:none"></label>
+  <div class="small muted" id="rbmsg" style="margin-top:8px"></div><button class="btn" id="rbgo" data-act="rbgo" style="margin-top:8px" hidden>Przywróć</button>
+  <label class="field" style="margin-top:14px"><span>Klucz Gemini (paragony)</span><input id="gk2" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${gkey() ? 'zapisany: ••••' + esc(gkey().slice(-4)) : 'AIza…'}" data-change="gkey"></label>
   ${S.mode === 'demo' ? '' : '<button class="btn ghost" style="margin-top:10px" data-act="loaddemo">Wróć do danych demo</button>'}
   <button class="btn ghost" style="margin-top:10px;color:var(--warn)" data-act="wipe" ${S.mode === 'demo' ? 'disabled' : ''}>Usuń wszystkie moje dane</button>
   <div class="small muted" style="margin-top:16px">Budżet v0.1 (prototyp). Dane są tylko w tym urządzeniu. Synchronizacja z partnerką pojawi się w następnym etapie.</div>`);
@@ -401,6 +534,11 @@ function sSettings() {
 let wipeArm = false;
 const ACT = {
   nav: d => { VIEW = d.to; location.hash = '#' + d.to; closeSheet(); },
+  cashadd: () => sCashAdd(), cashcal: () => sCashCal(),
+  cashsave: () => { const amt = parseFloat(String($('#cAmt').value).replace(',', '.')), name = $('#cName').value.trim(); if (!(amt > 0) || !name) { toast('Podaj kwotę i nazwę'); return; } S.cashLog.push({ id: 'c' + Date.now().toString(36), date: $('#cDate').value || TODAY, amount: amt, name, cat: $('#cCat').value }); save(); closeSheet(); render(); toast('Zapisano'); },
+  cashcalsave: () => { const v = parseFloat(String($('#cBal').value).replace(',', '.')); if (!(v >= 0)) { toast('Podaj kwotę'); return; } S.cash = { since: TODAY, adj: v }; save(); closeSheet(); render(); toast('Stan portfela zapisany'); },
+  cashrow: d => { const l = S.cashLog.find(x => x.id === d.id); if (!l) return; openSheet(`<h3>${esc(l.name)}</h3><div class="muted small">${plDate(l.date)} · ${money(l.amount)}</div><button class="btn ghost" style="margin-top:18px" data-act="cashdel" data-id="${esc(l.id)}">Usuń wpis</button>`); },
+  cashdel: d => { S.cashLog = S.cashLog.filter(x => x.id !== d.id); save(); closeSheet(); render(); toast('Usunięto'); },
   add: () => sAdd(), import: () => sImport(), manual: () => sManual(), msave: () => saveManual(), settings: () => sSettings(),
   month: d => { U.mk = d.m; U.cat = null; U.limit = 50; render(); },
   who: d => { U.who = d.w; U.cat = null; U.limit = 50; render(); },
@@ -416,6 +554,11 @@ const ACT = {
   pconfirm: () => { const P = planData(); S.plan[P.mk] = { limits: { ...P.limits }, savings: P.savings }; save(); render(); toast('Plan zapisany'); },
   preset: () => { delete S.plan[planMonth()]; save(); render(); toast('Przywrócono propozycję'); },
   sav: d => { S.savings = Math.max(0, S.savings + +d.d); save(); rebuild(); sSettings(); render(); },
+  receipt: () => sReceipt(),
+  gksave: () => { const v = $('#gk').value.trim(); if (v.length < 20) { toast('To nie wygląda na klucz'); return; } try { localStorage.setItem(GKEY, v); } catch { toast('Nie mogę zapisać klucza'); return; } sReceipt(); },
+  rcsave: () => saveReceipt(),
+  exportcsv: () => exportCSV(),
+  rbgo: () => { if (!restoreArm) return; S = restoreArm; S.cashLog = S.cashLog || []; S.cash = S.cash || {}; S.receipts = S.receipts || {}; restoreArm = null; save(); rebuild(); closeSheet(); render(true); toast('Kopia przywrócona'); },
   export: () => { const b = new Blob([JSON.stringify(S, null, 1)], { type: 'application/json' }), a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `budzet-kopia-${TODAY}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); },
   loaddemo: () => { S = fresh(); save(); rebuild(); closeSheet(); render(true); },
   wipe: (d, el) => { if (!wipeArm) { wipeArm = true; el.textContent = 'Na pewno? Dotknij ponownie'; setTimeout(() => { wipeArm = false; }, 4000); return; } wipeArm = false; S = fresh(); S.mode = 'real'; save(); rebuild(); closeSheet(); render(true); toast('Dane usunięte'); },
@@ -425,6 +568,12 @@ document.addEventListener('change', async e => {
   const el = e.target.closest('[data-change]'); if (!el) return;
   const k = el.dataset.change;
   if (k === 'imacc') { IM.accountId = el.value; IM.picked = true; if (IM.files.length) runImport(); else renderImport(); }
+  else if (k === 'rbfile' && el.files[0]) restoreBackup(el.files[0]);
+  else if (k === 'gkey') { const v = el.value.trim(); try { if (v) localStorage.setItem(GKEY, v); else localStorage.removeItem(GKEY); } catch { } toast(v ? 'Klucz zapisany' : 'Klucz usunięty'); }
+  else if (k === 'rcfile' && el.files[0]) {
+    openSheet('<h3>Czytam paragon…</h3><div class="muted small">To trwa kilka sekund.</div><div class="card flat" style="margin-top:16px;height:90px;opacity:.5;animation:pulse 1.2s infinite alternate"></div>');
+    try { RC = await scanReceipt(el.files[0], gkey()); renderReceipt(); } catch (e) { openSheet(`<h3>Nie wyszło</h3><div class="muted small">${esc(e.message)}</div><button class="btn" style="margin-top:18px" data-act="receipt">Spróbuj ponownie</button>`); }
+  }
   else if (k === 'imname') IM.newName = el.value;
   else if (k === 'imperson') { IM.newPerson = el.value; if (IM.files.length) runImport(); }
   else if (k === 'imfile' && el.files.length) {

@@ -307,8 +307,11 @@ export function importFiles(files, { account = 'konto', person = 'ja', mapping =
   });
   if (parts.length === 1 && parts[0].needsMapping) return { ...parts[0], files: parts, unreadable: [] };
   const good = parts.filter(p => !p.needsMapping && p.txs.length), unreadable = parts.filter(p => p.needsMapping || !p.txs.length).map(p => p.name);
-  const ids = new Set(), txs = [];
+  const ids = new Set(); let txs = [];
   for (const p of good) for (const t of p.txs) if (!ids.has(t.id)) { ids.add(t.id); txs.push(t); }
+  // ten sam okres w dwóch formatach: zostawiam wiersze z MT940, a z CSV tylko te, których tam nie ma
+  const mtRows = good.filter(p => p.format === 'MT940').flatMap(p => p.txs), csvRows = good.filter(p => p.format !== 'MT940').flatMap(p => p.txs);
+  if (mtRows.length && csvRows.length) { const dup = findDuplicates(mtRows, csvRows); txs = txs.filter(t => !dup.has(t.id)); }
   const statements = good.flatMap(p => p.statements || []).sort((a, b) => (a.to || '').localeCompare(b.to || ''));
   const ibans = [...new Set(good.flatMap(p => p.ibans || (p.iban ? [p.iban] : [])))];
   const banks = [...new Set(good.map(p => p.bank).filter(Boolean))];

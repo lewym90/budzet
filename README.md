@@ -13,7 +13,7 @@ Wszystkie liczby liczy zwykły kod (`js/engine.js`), bez AI. Dane zostają w tel
 W repozytorium nie ma żadnych danych finansowych. Wyciągi wczytujesz tylko w aplikacji, na telefonie.
 
 ## Stan
-- Gotowe: Dziś, Wydatki, Stałe, Plan, import CSV i MT940 (.sta, wiele plików naraz, kontrola sald; sprawdzone na prawdziwych wyciągach ING; autodetekcja banku + ręczne mapowanie kolumn), wydatek ręczny, dane demo.
+- Gotowe: Dziś, Wydatki, Stałe, Plan, import CSV i MT940 (.sta, wiele plików naraz, kontrola sald; sprawdzone na prawdziwych wyciągach ING; autodetekcja banku + ręczne mapowanie kolumn), wydatek ręczny, zakładka Gotówka (portfel), czytnik paragonów (Gemini, własny klucz), kopia i eksport CSV, dane demo.
 - Niezweryfikowane: układy CSV czterech banków opisano z pamięci. Potrzebne próbki z prawdziwych eksportów.
 - Kursy walut: przybliżone, docelowo NBP z dnia transakcji.
 - Następne etapy: paragony (OCR z kontrolą sumy), wspólne konto z partnerką przez serwer lewym90, raporty, prognozy.
@@ -21,6 +21,7 @@ W repozytorium nie ma żadnych danych finansowych. Wyciągi wczytujesz tylko w a
 ## Struktura
 - `js/engine.js` kategorie, przelewy własne, stałe opłaty, budżet, wnioski
 - `js/parsers.js` importery CSV i MT940
+- `js/receipt.js` odczyt paragonów przez Gemini
 - `js/demo.js` dane demo (zmyślone)
 - `js/app.js` interfejs
 - `tools/` testy silnika i zrzuty ekranu (Playwright), nie są potrzebne do działania
