@@ -1,6 +1,6 @@
 import { fmtInt, CATS, CAT, analyze, budgetState, insights, suggestPlan, monthTotals, monthKey, addMonths, dnum, plDate, money } from './engine.js';
 import { demoData, DEMO_ACCOUNTS } from './demo.js';
-import { decodeBuffer, importCSV, FIELDS } from './parsers.js';
+import { decodeBuffer, importFiles, findDuplicates, FIELDS } from './parsers.js';
 
 /* ---------- pomocnicze ---------- */
 const $ = s => document.querySelector(s);
@@ -253,7 +253,7 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 
 function sAdd() {
   openSheet(`<h3>Dodaj</h3><div class="muted small">Dane zostają w tym telefonie.</div>
-  <button class="opt" data-act="import"><span class="g">${svg(I.file)}</span><span><b>Wyciąg z banku (CSV)</b><span>ING, Alior, Revolut, mBank i inne banki</span></span></button>
+  <button class="opt" data-act="import"><span class="g">${svg(I.file)}</span><span><b>Wyciąg z banku (CSV lub MT940)</b><span>Wiele plików naraz, np. cały rok</span></span></button>
   <button class="opt" disabled><span class="g">${svg(I.cam)}</span><span><b>Paragon ze zdjęcia</b><span>Skanowanie w następnym etapie</span></span></button>
   <button class="opt" data-act="manual"><span class="g">${svg(I.pen)}</span><span><b>Wydatek ręcznie</b><span>Gotówka i drobne zakupy</span></span></button>`);
 }
@@ -262,7 +262,7 @@ function sAdd() {
 let IM = null;
 function sImport() {
   const accs = accounts();
-  IM = { accountId: accs.length && S.mode !== 'demo' ? accs[0].id : 'new', newId: 'k' + Date.now().toString(36), newName: '', newPerson: 'ja', text: null, res: null, file: '' };
+  IM = { accountId: accs.length && S.mode !== 'demo' ? accs[0].id : 'new', newId: 'k' + Date.now().toString(36), newName: '', newPerson: 'ja', files: [], res: null, picked: false };
   renderImport();
 }
 function renderImport() {
@@ -271,15 +271,23 @@ function renderImport() {
   <label class="field"><span>Konto</span><select data-change="imacc">${accs.map(a => `<option value="${esc(a.id)}" ${IM.accountId === a.id ? 'selected' : ''}>${esc(a.name)} (${esc(PN[a.person])})</option>`).join('')}<option value="new" ${IM.accountId === 'new' ? 'selected' : ''}>＋ Nowe konto…</option></select></label>`;
   if (IM.accountId === 'new') body += `<label class="field"><span>Nazwa konta</span><input id="newName" placeholder="np. ING osobiste" value="${esc(IM.newName)}" data-change="imname"></label>
   <label class="field"><span>Właściciel</span><select data-change="imperson"><option value="ja" ${IM.newPerson === 'ja' ? 'selected' : ''}>Ja</option><option value="partnerka" ${IM.newPerson === 'partnerka' ? 'selected' : ''}>Partnerka</option></select></label>`;
-  if (!r) body += `<label class="btn" style="margin-top:18px;cursor:pointer">Wybierz plik CSV<input type="file" accept=".csv,.txt,text/csv,text/plain" data-change="imfile" style="display:none"></label>`;
+  if (!r) body += `<label class="btn" style="margin-top:18px;cursor:pointer">Wybierz pliki wyciągu<input type="file" multiple data-change="imfile" style="display:none"></label><div class="small muted" style="margin-top:8px">CSV albo MT940 (.sta). Możesz zaznaczyć wiele plików, np. wszystkie miesiące.</div>`;
   else if (r.needsMapping) {
     body += `<div class="card flat" style="margin-top:14px"><b>Nie rozpoznałem układu kolumn.</b><div class="small muted">Wskaż, która kolumna co zawiera.</div></div><div class="mapgrid">${FIELDS.map(f => `<label class="field" style="margin-top:6px"><span>${f.label}</span><select data-change="immap" data-f="${f.id}"><option value="">— brak —</option>${r.columns.map((c, i) => `<option value="${i}" ${r.mapping[f.id] === i ? 'selected' : ''}>${esc(c || 'kolumna ' + (i + 1))}</option>`).join('')}</select></label>`).join('')}</div>
     <button class="btn" style="margin-top:16px" data-act="imapply">Zastosuj</button>`;
   } else {
-    const have = new Set(S.raw.map(t => t.id)), fresh = r.txs.filter(t => S.mode === 'demo' || !have.has(t.id));
+    const dup = S.mode === 'demo' ? new Set() : findDuplicates(S.raw, r.txs), fresh = r.txs.filter(t => !dup.has(t.id));
+    const selAcc = S.accounts.find(a => a.id === IM.accountId), warn = [];
+    if (selAcc && selAcc.iban && r.iban && selAcc.iban !== r.iban) warn.push('Ten wyciąg dotyczy innego rachunku niż wybrane konto.');
+    if (r.ibans && r.ibans.length > 1) warn.push('Pliki dotyczą kilku różnych rachunków. Importuj każdy rachunek osobno.');
+    if (r.unreadable && r.unreadable.length) warn.push('Nie odczytałem: ' + r.unreadable.map(esc).join(', '));
+    if (r.balance && r.balance.missing.length) warn.push('Brakuje wyciągów za: ' + r.balance.missing.join(', '));
+    if (r.balance && (r.balance.bad.length || r.balance.gaps.length)) warn.push('Salda się nie zgadzają' + (r.balance.bad.length ? ' w wyciągach: ' + r.balance.bad.join(', ') : '') + (r.balance.gaps.length ? '; ciągłość przerwana przy: ' + r.balance.gaps.join(', ') : '') + '.');
     const ds = r.txs.map(t => t.date).sort();
     body += `<div class="card flat" style="margin-top:14px">
       <div class="kv"><span class="muted">Bank</span><b>${esc(r.bank)}</b></div>
+      ${r.files && r.files.length > 1 ? `<div class="kv"><span class="muted">Pliki</span><b class="num">${r.files.length - (r.unreadable || []).length}</b></div>` : ''}
+      ${r.balance ? `<div class="kv"><span class="muted">Salda i ciągłość wyciągów</span><b class="${r.balance.ok ? 'pos' : 'neg'}">${r.balance.ok ? 'zgodne ✓' : 'rozbieżność'}</b></div>` : ''}
       ${r.check ? `<div class="kv"><span class="muted">Kontrola z podsumowaniem banku</span><b class="${r.check.ok ? 'pos' : 'neg'}">${r.check.ok ? 'zgodna ✓' : 'rozbieżność'}</b></div>` : ''}
       <div class="kv"><span class="muted">Wiersze w pliku</span><b class="num">${r.txs.length}</b></div>
       ${r.txs.some(t => t.pending) ? `<div class="kv"><span class="muted">W tym karta w toku</span><b class="num">${r.txs.filter(t => t.pending).length}</b></div>` : ''}
@@ -287,6 +295,7 @@ function renderImport() {
       <div class="kv"><span class="muted">Już były (pominę)</span><b class="num">${r.txs.length - fresh.length}</b></div>
       ${r.skipped.length ? `<div class="kv"><span class="muted">Nieważne (oczekujące, wymiany)</span><b class="num">${r.skipped.length}</b></div>` : ''}
       ${ds.length ? `<div class="kv"><span class="muted">Okres</span><b>${plDate(ds[0])} – ${plDate(ds[ds.length - 1])} ${ds[ds.length - 1].slice(0, 4)}</b></div>` : ''}</div>
+    ${warn.map(w => `<div class="small" style="margin-top:8px;color:var(--pa)">${w}</div>`).join('')}
     ${r.txs.some(t => t.currency !== 'PLN') ? '<div class="small muted" style="margin-top:8px">Waluty obce przeliczam przybliżonym kursem. Docelowo: kurs NBP z dnia transakcji.</div>' : ''}
     ${S.mode === 'demo' ? '<div class="small" style="margin-top:8px;color:var(--pa)">Dane demo zostaną zastąpione Twoimi.</div>' : ''}
     <button class="btn" style="margin-top:16px" data-act="imgo" ${fresh.length ? '' : 'disabled'}>Zaimportuj ${fresh.length} ${fresh.length === 1 ? 'transakcję' : 'transakcji'}</button>
@@ -295,9 +304,14 @@ function renderImport() {
   openSheet(body);
 }
 function runImport(mapping) {
+  if (!IM.picked && IM.files.length) { // bez wyboru ręcznego dobieram konto po numerze rachunku
+    const probe = importFiles(IM.files, { account: 'x' });
+    const m = probe.iban && S.accounts.find(a => a.iban === probe.iban);
+    if (m) IM.accountId = m.id;
+  }
   const person = IM.accountId === 'new' ? IM.newPerson : (S.accounts.find(a => a.id === IM.accountId) || {}).person || 'ja';
   const acc = IM.accountId === 'new' ? IM.newId : IM.accountId;
-  IM.res = importCSV(IM.text, { account: acc, person, mapping: mapping || null, headerIndex: mapping ? (IM.res ? IM.res.headerIndex : 0) : null });
+  IM.res = importFiles(IM.files, { account: acc, person, mapping: mapping || null, headerIndex: mapping ? (IM.res ? IM.res.headerIndex : 0) : null });
   if (IM.accountId === 'new' && !IM.newName && IM.res.bank && IM.res.bank !== 'Nieznany bank') IM.newName = IM.res.bank;
   renderImport();
 }
@@ -305,10 +319,11 @@ function commitImport() {
   const r = IM.res; if (!r || r.needsMapping) return;
   if (S.mode === 'demo') { S.mode = 'real'; S.raw = []; S.accounts = []; S.overrides = {}; S.plan = {}; S.cancel = {}; }
   let accId = IM.accountId;
-  if (accId === 'new') { S.accounts.push({ id: IM.newId, name: (IM.newName || r.bank || 'Konto').trim(), person: IM.newPerson }); accId = IM.newId; }
-  const have = new Set(S.raw.map(t => t.id)), add = r.txs.filter(t => !have.has(t.id)).map(({ id, date, amount, currency, merchant, title, account, person, balance, pending }) => ({ id, date, amount, currency, merchant, title, account, person, balance, ...(pending ? { pending: true } : {}) }));
+  if (accId === 'new') { S.accounts.push({ id: IM.newId, name: (IM.newName || r.bank || 'Konto').trim(), person: IM.newPerson, ...(r.iban ? { iban: r.iban } : {}) }); accId = IM.newId; }
+  const dup = findDuplicates(S.raw, r.txs), add = r.txs.filter(t => !dup.has(t.id)).map(({ id, date, amount, currency, merchant, title, account, person, balance, pending, booked }) => ({ id, date, amount, currency, merchant, title, account, person, balance, ...(booked ? { booked } : {}), ...(pending ? { pending: true } : {}) }));
   S.raw.push(...add); S.raw = reconcilePending(S.raw);
-  const ac = S.accounts.find(a => a.id === accId); if (ac && r.owner && !ac.owner) ac.owner = r.owner; // do rozpoznawania przelewów własnych
+  const ac = S.accounts.find(a => a.id === accId); if (ac && r.iban && !ac.iban) ac.iban = r.iban;
+  if (ac && r.owner && !ac.owner) ac.owner = r.owner; // do rozpoznawania przelewów własnych
   save(); rebuild(); closeSheet();
   const ms = monthsWithData(); U.mk = ms[ms.length - 1]; VIEW = 'dzis'; location.hash = '#dzis'; render(true);
   toast(`Dodano ${add.length} transakcji`);
@@ -395,7 +410,7 @@ const ACT = {
   setcat: d => { const t = TX.find(x => x.id === d.id); S.overrides[t.mkey] = d.c; save(); rebuild(); closeSheet(); render(); toast(`${t.name}: ${CAT[d.c].name}`); },
   cancelmark: d => { S.cancel[d.k] = !S.cancel[d.k]; if (!S.cancel[d.k]) delete S.cancel[d.k]; save(); closeSheet(); render(); },
   imapply: () => { const m = {}; pane.querySelectorAll('[data-f]').forEach(s => { if (s.value !== '') m[s.dataset.f] = +s.value; }); runImport(m); },
-  imgo: () => commitImport(), imreset: () => { IM.res = null; IM.text = null; renderImport(); },
+  imgo: () => commitImport(), imreset: () => { IM.res = null; IM.files = []; renderImport(); },
   psave: d => { const P = planData(); S.plan[P.mk] = { limits: { ...P.limits }, savings: Math.max(0, P.savings + +d.d) }; save(); render(); },
   plimit: d => { const P = planData(); const l = { ...P.limits }; l[d.c] = Math.max(0, (l[d.c] || 0) + +d.d); S.plan[P.mk] = { limits: l, savings: P.savings }; save(); render(); },
   pconfirm: () => { const P = planData(); S.plan[P.mk] = { limits: { ...P.limits }, savings: P.savings }; save(); render(); toast('Plan zapisany'); },
@@ -409,11 +424,11 @@ document.addEventListener('click', e => { const el = e.target.closest('[data-act
 document.addEventListener('change', async e => {
   const el = e.target.closest('[data-change]'); if (!el) return;
   const k = el.dataset.change;
-  if (k === 'imacc') { IM.accountId = el.value; if (IM.text) runImport(); else renderImport(); }
+  if (k === 'imacc') { IM.accountId = el.value; IM.picked = true; if (IM.files.length) runImport(); else renderImport(); }
   else if (k === 'imname') IM.newName = el.value;
-  else if (k === 'imperson') { IM.newPerson = el.value; if (IM.text) runImport(); }
-  else if (k === 'imfile' && el.files[0]) {
-    try { IM.file = el.files[0].name; IM.text = decodeBuffer(await el.files[0].arrayBuffer()); runImport(); } catch { toast('Nie mogę odczytać pliku'); }
+  else if (k === 'imperson') { IM.newPerson = el.value; if (IM.files.length) runImport(); }
+  else if (k === 'imfile' && el.files.length) {
+    try { IM.files = await Promise.all([...el.files].map(async f => ({ name: f.name, text: decodeBuffer(await f.arrayBuffer()) }))); runImport(); } catch { toast('Nie mogę odczytać pliku'); }
   }
 });
 addEventListener('hashchange', () => { const v = (location.hash || '#dzis').slice(1); if (VIEWS[v] && v !== VIEW) { VIEW = v; render(true); } else if (VIEWS[v]) render(true); });

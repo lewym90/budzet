@@ -32,3 +32,23 @@ for (const [n, t] of [['ING', ing], ['mBank', mb], ['Revolut', rv]]) {
   console.log(`\n${n}: wykryto=${res.bank} mapowanie=${JSON.stringify(res.mapping)} tx=${res.txs.length} pominięte=${res.skipped.length}`);
   for (const x of res.txs) console.log('  ', x.date, x.amount, x.currency, x.merchant, '|', x.title, '|', x.balance);
 }
+
+// --- MT940: zmyślony wyciąg w układzie ING (nigdy prawdziwe dane) ---
+import { importFiles as impF, findDuplicates as fd } from '../js/parsers.js';
+const mt = `:20:STMT/1
+:25:/PL00105000000000000000000000
+:28C:1/1
+:60F:C261001PLN1000,00
+:61:2610021002D45,80NVE02NONREF
+:86:020
+:86:020~00VE02~20Płatność kartą 01.10.2026 ~21Nr karty 0000xx0000~32BIEDRONKA 1234~33WARSZAWA
+:61:2610051005C2000,00NEXGCNONREF
+:86:020
+:86:020~00EXGC~20Uposażenie za 09/2026~32PRACODAWCA SA
+:62F:C261031PLN2954,20
+-`;
+const m1 = impF([{ name: 'a.sta', text: mt }], { account: 'ing' });
+console.log('\nMT940:', m1.bank, m1.iban, 'tx=' + m1.txs.length, 'salda ok=' + m1.balance?.ok);
+for (const x of m1.txs) console.log('  ', x.date, x.booked || '', x.amount, x.merchant, '|', x.title);
+console.assert(m1.txs.length === 2 && m1.balance.ok && m1.txs[0].date === '2026-10-01' && m1.txs[0].booked === '2026-10-02', 'MT940 zły wynik');
+console.assert(fd(m1.txs, m1.txs).size === 2, 'duplikaty MT940');
