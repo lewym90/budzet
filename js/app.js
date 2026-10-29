@@ -415,8 +415,9 @@ function vAnaliza() {
       <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="muted small">Saldo dziś</span><b class="num neg" style="font-size:22px">${sm(dv.nowBal)}</b></div>
       ${spark(dv.series.map(s => s.bal))}
       <div class="small muted" style="display:flex;justify-content:space-between"><span>${mName(dv.series[0].mk)}</span><span>${mName(dv.series[dv.series.length - 1].mk)}</span></div>
-      <div class="kv"><span class="muted">Koszt odsetek i opłat za limit</span><b class="num">${money(dv.avgMonthlyCost)} / mies.</b></div>
-      <div class="kv"><span class="muted">Łącznie w tym okresie</span><b class="num">${money(dv.totalCost)}</b></div>
+      <div class="kv"><span class="muted">Odsetki od debetu</span><b class="num">${money(dv.avgMonthlyCost)} / mies.</b></div>
+      <div class="kv"><span class="muted">Odsetki łącznie w tym okresie</span><b class="num">${money(dv.totalCost)}</b></div>
+      ${dv.feeTotal ? `<div class="kv"><span class="muted">Opłaty za limit (osobno, nieregularne)</span><b class="num">${money(dv.feeTotal)}</b></div>` : ''}
       <div class="kv"><span class="muted">Średni dług</span><b class="num">${money(dv.avgDebt)}</b></div>
       <div class="kv"><span class="muted">Zmiana salda, ostatnie 3 mies.</span><b class="num ${dv.delta < 0 ? 'neg' : 'pos'}">${dv.delta < 0 ? '−' : '+'}${money(Math.abs(dv.delta))} / mies.</b></div>
       <div class="h2" style="margin:16px 0 6px">Co jeśli odkładasz na spłatę<span class="step"><button data-act="debtx" data-d="-250" aria-label="Mniej">−</button><span class="n">${money(extra)}</span><button data-act="debtx" data-d="250" aria-label="Więcej">+</button></span></div>

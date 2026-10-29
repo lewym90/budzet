@@ -39,7 +39,8 @@ const RULES = [
   [/AUTO[- ]?(MIX|PERFEKT)|MYJNIA|WULKANIZ|WARSZTAT/, 'Auto', 'transport'],
   [/KREA\.?AI/, 'Krea', 'subskrypcje', 'AI', 1],
   [/PROWIZJA ZA PRZEWALUTOWANIE/, 'Prowizje za przewalutowanie', 'inne', 'Bank'],
-  [/ODS - KRED|OBSL\.? ?LIMITU|LIMITU ZADL/, 'Koszt zadłużenia w koncie', 'inne', 'Dług'],
+  [/ODS - KRED/, 'Koszt zadłużenia w koncie', 'inne', 'Dług'],
+  [/OBSL\.? ?LIMITU|LIMITU ZADL|PROWIZJA ZA OBSL/, 'Prowizja za obsługę limitu', 'inne', 'Dług'],
   [/LIMIT W KONCIE/, 'Limit w koncie', 'inne', null, 0, 0, { own: 1 }],
   [/PRZELEW WLASNY/, 'Przelew własny', 'inne', null, 0, 0, { own: 1 }],
   [/REVOLUT\*\*|REVOLUT BANK/, 'Revolut (doładowanie)', 'inne', null, 0, 0, { own: 1 }],
@@ -459,11 +460,13 @@ export function insights(txs, rec, today, bs) {
       body: `${a.date === b.date ? `Dwie takie same płatności tego samego dnia (${plDate(a.date)})` : `Dwie takie same płatności: ${plDate(a.date)} i ${plDate(b.date)}`}. Jeśli to pomyłka, zgłoś reklamację w banku.`, go: 'wydatki' });
   }
   const since = dnum(today) - 92;
-  const debt = txs.filter(t => t.tag === 'Dług' && t.amountPLN < 0 && dnum(t.date) >= since);
-  if (debt.length) {
-    const d = sum(debt.map(t => -t.amountPLN));
-    out.push({ id: 'debt', tone: 'warn', rank: 0, title: `Koszt zadłużenia w koncie: ${money(d)} w 3 miesiące`,
-      body: `Odsetki od debetu i prowizja za limit, średnio ${money(d / 3)} miesięcznie. Spłata debetu to najpewniejsza oszczędność w tym budżecie.`, go: 'wydatki' });
+  const dtx = txs.filter(t => t.tag === 'Dług' && t.amountPLN < 0 && !t.pending).sort((x, y) => (x.date < y.date ? -1 : 1));
+  const interest = dtx.filter(t => t.name === 'Koszt zadłużenia w koncie'), fees = dtx.filter(t => t.name !== 'Koszt zadłużenia w koncie');
+  if (interest.length) {
+    const l3 = interest.slice(-3), avg = sum(l3.map(t => -t.amountPLN)) / l3.length, f0 = interest[0], f1 = interest[interest.length - 1];
+    const feeRecent = fees.filter(t => dnum(t.date) >= since), feeSum = sum(feeRecent.map(t => -t.amountPLN));
+    out.push({ id: 'debt', tone: 'warn', rank: 0, title: `Odsetki od debetu: ok. ${money(avg)} miesięcznie`,
+      body: `Naliczane co miesiąc około 5. dnia${interest.length > 3 ? `; od ${money(-f0.amountPLN)} w ${plDate(f0.date)} do ${money(-f1.amountPLN)} w ${plDate(f1.date)}` : ''}.${feeRecent.length ? ` Osobno opłaty za limit: ${money(feeSum)} w ostatnich 3 mies. (nieregularne, nie wliczam ich do miesięcznego kosztu).` : ''} Spłata debetu to najpewniejsza oszczędność w tym budżecie.`, go: 'wydatki' });
   }
   const fx = txs.filter(t => t.tag === 'Bank' && t.amountPLN < 0 && dnum(t.date) >= since);
   if (fx.length >= 3) {

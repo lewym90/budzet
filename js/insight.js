@@ -64,13 +64,14 @@ export function debtView(txs, accounts, today) {
     return { mk, bal: r0(sum(acc.map(a => { const exact = (a.bals || []).find(b => monthKey(b.date) === mk && b.date <= a.anchor.date); return exact ? exact.v : balanceAt(txs, a.id, a.anchor, end > a.anchor.date ? a.anchor.date : end); }))) };
   });
   // pierwszy miesiąc bywa niepełny: saldo liczone od początku danych, więc pomijamy go w trendzie
-  const costs = months.map(mk => ({ mk, v: r0(sum(txs.filter(t => t.tag === 'Dług' && t.amountPLN < 0 && monthKey(t.date) === mk).map(t => -t.amountPLN))) }));
+  const costs = months.map(mk => ({ mk, v: r0(sum(txs.filter(t => t.name === 'Koszt zadłużenia w koncie' && t.amountPLN < 0 && monthKey(t.date) === mk).map(t => -t.amountPLN))) }));
+  const feeTotal = r0(sum(txs.filter(t => t.tag === 'Dług' && t.name !== 'Koszt zadłużenia w koncie' && t.amountPLN < 0).map(t => -t.amountPLN)));
   const fullCosts = costs.filter(c => c.mk > monthKey(first) && c.mk < monthKey(last));
   const neg = series.filter(s => s.bal < 0);
   const totalCost = sum(costs.map(c => c.v)), avgDebt = neg.length ? -sum(neg.map(s => s.bal)) / neg.length : 0;
   const d3 = series.slice(-4); const delta = d3.length > 1 ? (d3[d3.length - 1].bal - d3[0].bal) / (d3.length - 1) : 0;
   const nowBal = series[series.length - 1].bal;
-  return { series, costs, nowBal, totalCost, avgMonthlyCost: fullCosts.length ? sum(fullCosts.map(c => c.v)) / fullCosts.length : 0, avgDebt, delta, active: nowBal < 0 };
+  return { series, costs, feeTotal, nowBal, totalCost, avgMonthlyCost: fullCosts.length ? sum(fullCosts.map(c => c.v)) / fullCosts.length : 0, avgDebt, delta, active: nowBal < 0 };
 }
 export function debtProject(nowBal, delta, extra, months = 12) {
   const out = []; let b = nowBal; for (let i = 1; i <= months; i++) { b += delta + extra; out.push(r0(b)); } return out;
