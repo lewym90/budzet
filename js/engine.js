@@ -223,8 +223,24 @@ const FREE_CATS = new Set(['jedzenie', 'restauracje', 'transport', 'zakupy', 'zd
 
 const dimOf = mk => new Date(+mk.slice(0, 4), +mk.slice(5, 7), 0).getDate();
 const monthDate = (mk, dom) => `${mk}-${String(Math.min(dom, dimOf(mk))).padStart(2, '0')}`;
-// bank księguje w dniu roboczym: sobota i niedziela przechodzą na poniedziałek
-const nextBizDay = d => { const w = new Date(d + 'T12:00:00Z').getUTCDay(); return w === 6 ? dstr(dnum(d) + 2) : w === 0 ? dstr(dnum(d) + 1) : d; };
+/* Święta ustawowe w Polsce liczone algorytmem (Wielkanoc wg Meeusa), bez pobierania danych.
+   Wigilia jest dniem wolnym od 2025 roku. */
+const holCache = new Map();
+export function plHolidays(year) {
+  if (holCache.has(year)) return holCache.get(year);
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3),
+    h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+    month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+  const easter = dnum(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  const set = new Set(['01-01', '01-06', '05-01', '05-03', '08-15', '11-01', '11-11', '12-25', '12-26'].map(x => `${year}-${x}`));
+  if (year >= 2025) set.add(`${year}-12-24`);
+  for (const off of [0, 1, 49, 60]) set.add(dstr(easter + off)); // Wielkanoc, poniedziałek wielkanocny, Zielone Świątki, Boże Ciało
+  holCache.set(year, set);
+  return set;
+}
+export const isOffDay = d => { const w = new Date(d + 'T12:00:00Z').getUTCDay(); return w === 0 || w === 6 || plHolidays(+d.slice(0, 4)).has(d); };
+// bank księguje w dniu roboczym: weekend i święta przesuwają płatność na najbliższy dzień roboczy
+export const nextBizDay = d => { let x = d; for (let k = 0; k < 10 && isOffDay(x); k++) x = dstr(dnum(x) + 1); return x; };
 
 /* Płatność cykliczna (miesięczna): ta sama kwota u tego samego sprzedawcy, odbiorcy lub numeru, w co najmniej 3 kolejnych miesiącach
    (subskrypcje z listy: 2). Liczy się miesiąc, nie dzień, więc przesunięcia o weekend i różne dni miesiąca nie przeszkadzają.
@@ -241,9 +257,27 @@ function detectGroup(arr, key, name, today, ref) {
   const perMonth = arr.length / months.length;
   let P = null, status = 'active', late = false, next;
   const amts = arr.map(t => -t.amountPLN), n = amts.length;
-  if (run >= (isSub ? 2 : 3) && perMonth <= 1.25) {
+  // kwota: miesiąc po miesiącu, w trailing serii kolejnych miesięcy. Dopuszczam drobny dryf (np. 1-3 zł za późną płatność, dodatkowa usługa)
+  // i trwałą zmianę poziomu (np. czynsz 2000 → 2150). Tolerancja zależy od rodzaju płatności.
+  const tolOf = a => isSub ? Math.max(2, 0.05 * a) : isPerson ? Math.max(5, 0.10 * a) : isFixed ? Math.max(10, 0.35 * a) : Math.max(5, 0.12 * a);
+  let seq = [], regimes = [];
+  const monthlyOk = () => {
+    if (!(run >= (isSub ? 2 : 3) && perMonth <= 1.25)) return false;
+    const medAll = median(amts), tail = months.slice(-run);
+    seq = tail.map(m => { const c = arr.filter(t => t.date.startsWith(m)).map(t => -t.amountPLN); return c.reduce((b, x) => (Math.abs(x - medAll) < Math.abs(b - medAll) ? x : b), c[0]); });
+    let cur = [seq[0]]; regimes = [cur];
+    for (let i = 1; i < seq.length; i++) {
+      const big = Math.abs(seq[i] - seq[i - 1]) > tolOf(seq[i - 1]);
+      if (!big) { cur.push(seq[i]); continue; }
+      const ratio = Math.abs(seq[i] - seq[i - 1]) / seq[i - 1];
+      if (i === seq.length - 1 ? ratio > 0.6 : i > seq.length - 3) return false; // nowy poziom musi się utrzymać co najmniej 2 miesiące, chyba że to najświeższa zmiana
+      cur = [seq[i]]; regimes.push(cur);
+    }
+    return regimes.length <= 3;
+  };
+  if (monthlyOk()) {
     P = PERIODS.find(p => p.id === 'monthly');
-    const doms = arr.map(t => +t.date.slice(8, 10)).sort((a, b) => a - b), dom = doms[Math.floor(doms.length / 2)];
+    const doms = arr.map(t => +t.date.slice(8, 10)).sort((x, y) => x - y), dom = doms[Math.floor(doms.length / 2)];
     const spread = Math.max(...doms.map(d => Math.abs(d - dom)));
     const refM = ref.slice(0, 7), lastM = months[months.length - 1], expect = m => nextBizDay(monthDate(m, dom));
     if (lastM === refM) next = expect(addMonths(refM, 1));
@@ -264,20 +298,14 @@ function detectGroup(arr, key, name, today, ref) {
     if (gaps.filter(x => Math.abs(x - g) <= P.tol + 1).length / gaps.length < 0.7) return null;
     next = dstr(days[days.length - 1] + Math.round(g));
     status = dnum(ref) - dnum(next) <= Math.max(10, 0.35 * g) ? 'active' : 'ended';
+    const med0 = median(amts); if (Math.max(...amts.map(a => Math.abs(a - med0) / med0)) > 0.5) return null;
   }
   let priceChange = null;
-  if (n >= 4) {
-    const early = amts.slice(0, n - 2), em = median(early);
-    const es = Math.max(...early.map(a => Math.abs(a - em) / em));
-    const lt = amts.slice(n - 2);
-    if (es <= 0.05 && Math.abs(lt[0] - lt[1]) / lt[1] <= 0.03 && Math.abs(lt[1] - em) / em > 0.06 && Math.abs(lt[1] - em) >= 1)
-      priceChange = { from: em, to: lt[1] };
-  }
-  const med = median(amts);
-  const spreadA = Math.max(...amts.map(a => Math.abs(a - med) / med));
-  if (spreadA > (isPerson ? 0.05 : 0.5) && !priceChange) return null;
+  if (regimes.length > 1) { const prevR = regimes[regimes.length - 2], lastR = regimes[regimes.length - 1]; priceChange = { from: median(prevR), to: lastR[lastR.length - 1] }; if (Math.abs(priceChange.to - priceChange.from) < 1) priceChange = null; }
+  const lastRegime = regimes.length ? regimes[regimes.length - 1] : amts;
+  const med = median(lastRegime), spreadA = lastRegime.length ? Math.max(...lastRegime.map(a => Math.abs(a - med) / med)) : 0;
   const variable = !priceChange && spreadA > 0.08;
-  const latest = priceChange ? priceChange.to : variable ? sum(amts.slice(-3)) / Math.min(3, n) : amts[n - 1];
+  const latest = priceChange ? priceChange.to : variable ? sum(lastRegime.slice(-3)) / Math.min(3, lastRegime.length) : lastRegime[lastRegime.length - 1];
   const card = /PLATNOSC KART|BLIK/.test(strip(last.title).toUpperCase());
   return {
     arr, item: {
@@ -301,6 +329,9 @@ function clusterByAmount(arr) {
   return out;
 }
 
+let REC_IGNORE = new Set();
+export const setRecIgnore = list => { REC_IGNORE = new Set(list || []); };
+export const recBase = key => String(key).split('|').slice(0, 2).join('|');
 export function detectRecurring(txs, today) {
   const groups = new Map();
   const ref = txs.reduce((m, t) => (t.date <= today && t.date > m ? t.date : m), '0000-00-00'); // dane mogą kończyć się przed „dziś”
@@ -312,6 +343,7 @@ export function detectRecurring(txs, today) {
   }
   const out = [];
   for (const [gk, arr] of groups) {
+    if (REC_IGNORE.has(gk)) continue; // użytkownik wskazał, że to nie jest płatność cykliczna
     const rule = arr[0].rule, base = arr[arr.length - 1].name;
     let found = (rule && (rule.multi || rule.person)) ? null : detectGroup(arr, gk, base, today, ref);
     if (found) { for (const t of found.arr) t.recKey = gk; out.push(found.item); continue; }

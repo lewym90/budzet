@@ -77,3 +77,16 @@ console.assert(ev(base3, '2026-11-05') && !ev(base3, '2026-11-05').active, 'mies
 const gym = ['2026-07-01', '2026-08-03', '2026-08-31'].map(d => mk(d, -170, 'ENDORFINA PLATINIUM', 'Płatność kartą'));
 const gy = an2(gym.concat([mk('2026-09-01', -170, 'ENDORFINA PLATINIUM', 'Płatność kartą')]).slice(0, 4), {}, '2026-09-30');
 console.log('\nCYKLICZNOŚĆ ok');
+
+// --- święta, dryf kwoty, zmiana poziomu ---
+import { plHolidays, nextBizDay } from '../js/engine.js';
+console.assert(plHolidays(2026).has('2026-04-06') && plHolidays(2026).has('2026-06-04') && plHolidays(2026).has('2026-12-24'), 'święta ruchome 2026');
+console.assert(nextBizDay('2026-11-01') === '2026-11-02' && nextBizDay('2026-11-11') === '2026-11-12' && nextBizDay('2026-12-24') === '2026-12-28', 'przesunięcie na dzień roboczy');
+const play = [['2026-07-03', -149.0], ['2026-08-17', -151.0], ['2026-09-09', -152.5], ['2026-10-21', -149.0]].map(([d, a]) => mk(d, a, 'P4 SP. Z O.O. PLAY', 'Faktura'));
+const pr = an2([...play, mk('2026-10-28', -5, 'ZABKA', 'Płatność kartą')], {}, '2026-10-28').find(r => /Play/.test(r.name));
+console.assert(pr && pr.active && !pr.late && pr.months === 4, 'Play: różne dni i drobny dryf kwoty to nadal jedna płatność cykliczna');
+const rent2 = [['2026-07-05', -2000], ['2026-08-03', -2000], ['2026-09-07', -2000], ['2026-10-05', -2000], ['2026-11-03', -2150]].map(([d, a]) => mk(d, a, 'ANNA TEST', 'Mieszkanie'));
+const rr = an2([...rent2], {}, '2026-11-05').map(x => x).find(r => /Czynsz/.test(r.name));
+const all2 = [...rent2]; applyPeople(all2, ppl); const rr2 = an2(all2, {}, '2026-11-05').find(r => /Czynsz/.test(r.name));
+console.assert(rr2 && rr2.active && Math.round(rr2.latest) === 2150, 'czynsz po zmianie z 2000 na 2150 pozostaje cykliczny');
+console.log('\nŚWIĘTA/DRYF ok');

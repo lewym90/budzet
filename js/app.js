@@ -1,3 +1,4 @@
+import { setRecIgnore, recBase } from './engine.js';
 import { forecast, debtView, debtProject, whyMonth, anomalies, inbox, yearSummary, productPrices } from './insight.js';
 import { narrate } from './narrate.js';
 import { fmtInt, setUserRules, normText, CATS, CAT, analyze, budgetState, insights, suggestPlan, monthTotals, monthKey, addMonths, dnum, plDate, money } from './engine.js';
@@ -39,8 +40,8 @@ const svg = (p, w = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentC
 
 /* ---------- stan ---------- */
 const KEY = 'budzet.v1';
-const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {}, people: [], rules: [], receiptLog: [], debtExtra: 0 });
-let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; j.people = j.people || []; j.rules = j.rules || []; j.receiptLog = j.receiptLog || []; return j; } } catch { } return fresh(); })();
+const fresh = () => ({ v: 1, mode: 'demo', accounts: [], raw: [], overrides: {}, plan: {}, savings: 1500, cancel: {}, cashLog: [], cash: {}, receipts: {}, people: [], rules: [], receiptLog: [], debtExtra: 0, recIgnore: [] });
+let S = (() => { try { const j = JSON.parse(localStorage.getItem(KEY) || 'null'); if (j && j.v === 1) { j.cashLog = j.cashLog || []; j.cash = j.cash || {}; j.receipts = j.receipts || {}; j.people = j.people || []; j.rules = j.rules || []; j.receiptLog = j.receiptLog || []; j.recIgnore = j.recIgnore || []; return j; } } catch { } return fresh(); })();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch { } };
 const accounts = () => (S.mode === 'demo' ? DEMO_ACCOUNTS : S.accounts);
 const accName = id => (accounts().find(a => a.id === id) || { name: id }).name;
@@ -50,6 +51,7 @@ function rebuild() {
   TX = (S.mode === 'demo' ? demoData(TODAY) : S.raw).map(t => ({ ...t, rawName: t.merchant }));
   if (S.mode !== 'demo') applyPeople(TX, S.people);
   setUserRules(S.mode === 'demo' ? [] : S.rules);
+  setRecIgnore(S.mode === 'demo' ? [] : S.recIgnore);
   REC = analyze(TX, S.overrides, TODAY, accounts().map(a => a.owner).filter(Boolean));
   BS = budgetState(TX, REC, TODAY, S.savings);
   INS = insights(TX, REC, TODAY, BS);
@@ -516,6 +518,7 @@ function sRules() {
   <div class="small muted" id="ruPrev" style="margin-top:6px"></div>
   <button class="btn" style="margin-top:12px" data-act="rusave">Dodaj regułę</button>
   ${ru.length ? `<div class="h2">Twoje reguły</div><div class="card flat">${ru.map((u, i) => `<div class="row"><div class="mid"><div class="t">„${esc(u.text)}”</div><div class="s">${esc((CAT[u.cat] || {}).name || u.cat)}</div></div><button class="chip" data-act="rudel" data-i="${i}">Usuń</button></div>`).join('')}</div>` : ''}
+  ${(S.recIgnore || []).length ? `<div class="h2">Wyłączone z cyklicznych</div><div class="card flat">${S.recIgnore.map(k => `<div class="row"><div class="mid"><div class="t">${esc(k.split('|')[0])}</div></div><button class="chip" data-act="recrestore" data-k="${esc(k)}">Przywróć</button></div>`).join('')}</div>` : ''}
   ${ov.length ? `<div class="h2">Zapamiętane kategorie<b class="num">${ov.length}</b></div><div class="card flat">${ov.slice(0, 40).map(([k, c]) => `<div class="row"><div class="mid"><div class="t">${esc(k)}</div><div class="s">${esc((CAT[c] || {}).name || c)}</div></div><button class="chip" data-act="ovdel" data-k="${esc(k)}">Usuń</button></div>`).join('')}</div>` : ''}`);
 }
 function rulePreview() {
@@ -673,7 +676,8 @@ function sRec(key) {
   <div class="kv"><span class="muted">Następna płatność</span><b>${r.active ? plDate(r.next) : 'brak, wygląda na zakończoną'}</b></div>
   <div class="kv"><span class="muted">Płatności w historii</span><b class="num">${r.count}</b></div>
   <div class="h2" style="margin-top:18px">Ostatnie płatności</div>${hist.map(t => `<div class="kv"><span>${plDate(t.date)} ${t.date.slice(0, 4)}</span><b class="num">${money(t.amountPLN, 2)}</b></div>`).join('')}
-  <button class="btn ${S.cancel[key] ? 'ghost' : ''}" style="margin-top:18px" data-act="cancelmark" data-k="${esc(key)}">${S.cancel[key] ? 'Zostawiam, odznacz' : 'Rozważam rezygnację'}</button>`);
+  <button class="btn ${S.cancel[key] ? 'ghost' : ''}" style="margin-top:18px" data-act="cancelmark" data-k="${esc(key)}">${S.cancel[key] ? 'Zostawiam, odznacz' : 'Rozważam rezygnację'}</button>
+  <button class="btn ghost" style="margin-top:10px" data-act="recignore" data-k="${esc(key)}">To nie jest płatność cykliczna</button>`);
 }
 
 function sSettings() {
@@ -717,6 +721,8 @@ const ACT = {
   pconfirm: () => { const P = planData(); S.plan[P.mk] = { limits: { ...P.limits }, savings: P.savings }; save(); render(); toast('Plan zapisany'); },
   preset: () => { delete S.plan[planMonth()]; save(); render(); toast('Przywrócono propozycję'); },
   sav: d => { S.savings = Math.max(0, S.savings + +d.d); save(); rebuild(); sSettings(); render(); },
+  recignore: d => { const b = recBase(d.k); if (!S.recIgnore.includes(b)) S.recIgnore.push(b); save(); rebuild(); closeSheet(); render(); toast('Przestałem traktować to jako cykliczne'); },
+  recrestore: d => { S.recIgnore = S.recIgnore.filter(x => x !== d.k); save(); rebuild(); sRules(); render(); },
   amonth: d => { U.am = d.m; render(); },
   debtx: d => { S.debtExtra = Math.max(0, Math.min(20000, (S.debtExtra || 0) + +d.d)); save(); render(); },
   narr: d => runNarr(d.t),
