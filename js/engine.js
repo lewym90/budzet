@@ -185,7 +185,7 @@ function personEffects(t, overrides) {
     } else { t.own = true; t.name = t.merchant; }
     return;
   }
-  if (!t.own && !(t.rule && !t.rule.person) && (t.pid || P2P(t))) {
+  if (!t.own && (t.pid || (!(t.rule && !t.rule.person) && P2P(t)))) {
     t.rule = { name: t.merchant, cat: 'osoby', tag: 'Osoby', sub: false, fixed: false, person: true };
     t.mkey = 'OSOBA ' + normKey(t.merchant); t.name = t.merchant; t.tag = 'Osoby';
     if (out) t.cat = overrides[t.mkey] || 'osoby'; else { t.cat = 'nieregularny'; t.irr = true; }

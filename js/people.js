@@ -16,7 +16,8 @@ export function applyPeople(txs, people) {
   const idx = buildIndex(people);
   for (const t of txs) {
     delete t.pid; delete t.prole;
-    const p = idx.get(normName(t.merchant));
+    const nm = normName(t.merchant); let p = idx.get(nm);
+    if (!p) for (const [k, v] of idx) if (k.length >= 6 && nm.startsWith(k + ' ')) { p = v; break; } // nazwa z doklejonym adresem
     if (p) { t.pid = p.id; t.prole = p.role; t.merchant = p.name; }
   }
   return txs;
